@@ -30,6 +30,9 @@ const BRIGHT := {
 	"level": preload("res://assets/audio/b_level.wav"), "clear": preload("res://assets/audio/b_clear.wav"),
 }
 
+## Keep the announcer system and saved preference available for a future return.
+const ANNOUNCER_ENABLED := false
+
 ## Announcer call-outs for big moments.
 const VOICES := {
 	"great": preload("res://assets/audio/voice_great.wav"), "super": preload("res://assets/audio/voice_super.wav"),
@@ -96,7 +99,7 @@ func apply_volumes() -> void:
 
 ## Speak a call-out; a newer one cuts off the one still talking.
 func voice(name: String) -> void:
-	if not Save.sound or not Save.voice or _platform_paused or not VOICES.has(name) or skin != "bright":
+	if not ANNOUNCER_ENABLED or not Save.sound or not Save.voice or _platform_paused or not VOICES.has(name) or skin != "bright":
 		return  # call-outs belong to the bright modes; classic stays calm
 	_voice.stream = VOICES[name]
 	_voice.volume_db = linear_to_db(maxf(Save.sound_volume, 0.001)) + 2.0

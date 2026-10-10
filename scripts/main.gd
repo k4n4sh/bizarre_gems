@@ -4,6 +4,10 @@ extends Control
 
 enum State { MENU, PLAYING, PAUSED, OVER }
 
+## Temporarily exposed modes; dormant cards and their progress stay intact.
+## Daily Challenge has its own menu entry and starts Bright Run with a daily seed.
+const MENU_MODES := ["classic", "bright"]
+
 const START_TIME := 120.0
 const CONTINUE_TIME := 15.0
 const HINT_AFTER := 15.0
@@ -219,7 +223,7 @@ func _ready() -> void:
 	L.language_changed.connect(_apply_texts)
 
 	board.logic = logic
-	_use_mode(str(Save.mode))
+	_use_mode(_menu_mode())
 	var d := _dims()
 	logic.setup(d.x, d.y, rng, mode.shining, mode.kinds, mode.per_kind)
 	_apply_texts()
@@ -295,9 +299,14 @@ func _on_sdk_ready() -> void:
 
 # ================= game flow =================
 
+## Old saves may still name a mode whose menu card is currently hidden.
+func _menu_mode() -> String:
+	return str(Save.mode) if str(Save.mode) in MENU_MODES else "classic"
+
+
 func start_game(mode_id := "", is_daily := false) -> void:
 	daily = is_daily
-	_use_mode(mode_id if mode_id != "" else str(Save.mode))
+	_use_mode(mode_id if mode_id != "" else _menu_mode())
 	if Save.mode != mode.id and mode.id in ["classic", "bright", "zen", "levels", "puzzle"]:
 		Save.mode = mode.id  # the tutorial and the daily challenge don't become "last mode"
 		Save.store()
@@ -2052,6 +2061,7 @@ func _build_modes() -> void:
 		cv.add_child(ui["card_play_" + id])
 		card.add_child(cv)
 		flow.add_child(card)
+		card.visible = id in MENU_MODES
 		ui.mode_cards.append(card)
 	cc.add_child(flow)
 	scroll.add_child(cc)
@@ -2675,7 +2685,7 @@ func _build_confirm() -> void:
 
 
 func _refresh_menu_bests() -> void:
-	ui.home_best.text = L.t("best") + ": " + str(Save.best_for(str(Save.mode)))
+	ui.home_best.text = L.t("best") + ": " + str(Save.best_for(_menu_mode()))
 	ui.home_crystals.text = str(Progress.crystals)
 	var due := Progress.unclaimed()
 	(ui.home_tasks.get_meta("caption") as Label).text = L.t("tasks") + (" (%d)" % due if due > 0 else "")
@@ -2946,6 +2956,7 @@ func _build_settings() -> void:
 		Save.store()
 		Sfx.voice("great"))
 	v.add_child(ui.chk_voice)
+	ui.chk_voice.visible = Sfx.ANNOUNCER_ENABLED
 	ui.chk_vibration = _check(Save.vibration, func(on: bool):
 		Save.vibration = on
 		Save.store()
@@ -3141,7 +3152,7 @@ func _show_panel(p: Control) -> void:
 		var tw := create_tween().set_parallel()
 		tw.tween_property(p, "modulate:a", 1.0, 0.18)
 		tw.tween_property(p, "scale", Vector2.ONE * fit, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		var first: Button = ui.get("card_play_" + str(Save.mode)) if p == mode_panel else _first_button(p)
+		var first: Button = ui.get("card_play_" + _menu_mode()) if p == mode_panel else _first_button(p)
 		if first:
 			first.grab_focus.call_deferred()
 
