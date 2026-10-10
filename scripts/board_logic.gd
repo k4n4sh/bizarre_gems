@@ -207,7 +207,7 @@ func shining_count(ps: Array[Vector2i]) -> int:
 
 
 ## Remove a strike's gems. Boxes only crack; a chain gem pulls its partner out with it.
-## Returns the extra positions removed through chains.
+## Returns unique positions actually removed through chains, excluding the direct strike.
 func remove(ps: Array[Vector2i]) -> Array[Vector2i]:
 	var extra: Array[Vector2i] = []
 	var queue: Array[Vector2i] = ps.duplicate()
@@ -223,6 +223,8 @@ func remove(ps: Array[Vector2i]) -> Array[Vector2i]:
 			hp[i] -= 1  # a box cracks and stays
 			continue
 		cells[i] = EMPTY
+		if not (p in ps):
+			extra.append(p)
 		shine[i] = 0
 		if ice.size() > i:
 			bomb[i] = 0
@@ -239,7 +241,6 @@ func remove(ps: Array[Vector2i]) -> Array[Vector2i]:
 				chain[j] = -1
 			if cells[j] != EMPTY:
 				var q := Vector2i(j % cols, j / cols)
-				extra.append(q)
 				queue.append(q)
 	return extra
 

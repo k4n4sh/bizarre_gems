@@ -851,8 +851,13 @@ func _on_slot(p: Vector2i) -> void:
 	if res.tier_up and res.mult >= 3:
 		board.praise(L.t("praise_super" if res.mult == 3 else "praise_wow"), p, COMBO_COLORS[res.mult - 1].lightened(0.35), 1.2)
 		Sfx.voice("super" if res.mult == 3 else "amazing")
-	cleared += n
-	_note_best_strike(p, gone, kinds, res)
+	# Hits still score when a box only cracks; removal counts use the destroyed gems.
+	cleared += vanish.size()
+	var vkinds: Array[int] = []
+	for i in gone.size():
+		if gone[i] in vanish:
+			vkinds.append(kinds[i])
+	_note_best_strike(p, vanish, vkinds, res)
 	if not thawed.is_empty():
 		board.play_thaw(thawed)
 		Sfx.play("bonus", 1.6, -4.0)
@@ -866,16 +871,11 @@ func _on_slot(p: Vector2i) -> void:
 	if extra.size() > 0:
 		keeper.score += extra.size() * 2
 		score = keeper.score
-		cleared += extra.size()
 		board.praise(L.t("chain"), p, Color("#9fe3ff"))
 	if mode.kind == "classic" or mode.kind == "levels":
 		time_left += res.time  # the bright run earns time only by clearing a whole board
 	idle = 0.0
 	var event: String = res.event
-	var vkinds: Array[int] = []
-	for i in gone.size():
-		if gone[i] in vanish:
-			vkinds.append(kinds[i])
 	board.play_knock(p, vanish, vkinds, res.points, res.mult, event != "")
 	if vanish.size() < gone.size():
 		board.shake(0.08)  # a box cracked

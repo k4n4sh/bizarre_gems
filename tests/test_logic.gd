@@ -209,6 +209,44 @@ func _init() -> void:
 	cb.chain[6] = 0
 	var extra := cb.remove(cb.matches_from(Vector2i(1, 0)))
 	check(extra.size() == 1 and cb.kind_at(Vector2i(0, 2)) == -1 and cb.gems_left() == 1, "a chain gem pulls its partner out")
+	# Regression: chain partners already in the cross are not extra removals.
+	var direct_chain := board_from(["1.1"])
+	direct_chain.chain[0] = 2
+	direct_chain.chain[2] = 0
+	var direct_hits := direct_chain.matches_from(Vector2i(1, 0))
+	var direct_extra := direct_chain.remove(direct_hits)
+	check(direct_extra.is_empty() and direct_chain.gems_left() == 0,
+		"chain partners inside one cross are removed once, with no extra positions")
+
+	# Regression: an outside partner is reported exactly once and outside the direct hit.
+	var outside_chain := board_from(["1.1", "...", "1.."])
+	outside_chain.chain[0] = 6
+	outside_chain.chain[6] = 0
+	var outside_hits := outside_chain.matches_from(Vector2i(1, 0))
+	var outside_extra := outside_chain.remove(outside_hits)
+	check(outside_extra.size() == 1 and outside_extra[0] == Vector2i(0, 2)
+		and not (outside_extra[0] in outside_hits) and outside_chain.gems_left() == 0,
+		"an outside chain partner is one unique extra removal")
+
+	# Regression: cracking a box is a hit, but not a destroyed gem.
+	var cracked_box := board_from(["1.1"])
+	cracked_box.hp[0] = 2
+	var box_hits := cracked_box.matches_from(Vector2i(1, 0))
+	var box_vanish := cracked_box.vanishing(box_hits)
+	var box_extra := cracked_box.remove(box_hits)
+	check(box_vanish.size() == 1 and box_vanish[0] == Vector2i(2, 0)
+		and box_extra.is_empty() and cracked_box.gems_left() == 1 and cracked_box.hp[0] == 1,
+		"a cracked box stays on the board and is not counted as destroyed")
+
+	# Even if a chain points at a box, only actual removals belong in extra.
+	var chained_box := board_from(["1.1", "...", "1.."])
+	chained_box.hp[6] = 2
+	chained_box.chain[0] = 6
+	chained_box.chain[6] = 0
+	var chained_box_extra := chained_box.remove(chained_box.matches_from(Vector2i(1, 0)))
+	check(chained_box_extra.is_empty() and chained_box.gems_left() == 1 and chained_box.hp[6] == 1,
+		"a chain that only cracks its partner reports no extra removal")
+
 	var chained_ok := true
 	var made_total := 0
 	for lvn in [8, 10, 12]:
