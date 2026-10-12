@@ -242,8 +242,9 @@ func runtime(main) -> void:
 		"six real pairs: three unchanged double hits and one continuous color chain")
 	check(main.keeper.combo == 6 and main.time_left == 122.0, "six pairs keep exact original tier time")
 	var widgets: Dictionary = main.hud_sets.classic.bonus
-	check(widgets.double_hit.modulate.a == 1.0 and widgets.color_streak.modulate.a == 1.0,
-		"simultaneous bonus notifications remain distinct")
+	check(main.board._texts[-1].double and main.board._texts[-1].chain == 0
+		and main.board._texts[-1].rows.size() == 3,
+		"simultaneous bonuses share one field popup with separate awarded values")
 	var earned: int = main.score
 	# No available matching rays from this empty slot: the ordinary miss path.
 	main._on_slot(Vector2i(12, 0))
@@ -266,7 +267,7 @@ func runtime(main) -> void:
 	main.play_time += 3.5001
 	main._process(0.0)
 	check(main.keeper.color_streak_kind == -1 and main.keeper._previous_color_points.is_empty()
-		and widgets.progress.modulate.a == 0.0,
+		and not widgets.progress.get_meta("hud_active"),
 		"frame timeout clears the chain and unpaid previous portions")
 	fixture(main, [0,0])
 	main._on_slot(A)
@@ -318,51 +319,29 @@ func layouts(main) -> void:
 		sample.keeper.reset()
 		hit(sample.keeper, 2, 0.0)
 		sample._update_bonus_progress()
-		check(widgets.progress.modulate.a == 0.0 and widgets.count.text.is_empty(), "pending first strike shows no progress")
-		var activation := hit(sample.keeper, 2, 1.0)
-		sample._show_bonus_feedback(activation)
+		check(not widgets.progress.get_meta("hud_active") and widgets.count.text == "0", "pending strike leaves a neutral counter")
+		hit(sample.keeper, 2, 1.0)
 		sample._update_bonus_progress()
-		var banner_tween: Tween = widgets.color_streak.get_meta("bonus_tween")
-		sample._show_bonus_feedback(hit(sample.keeper, 2, 2.0))
+		hit(sample.keeper, 2, 2.0)
 		sample._update_bonus_progress()
-		check(widgets.color_streak.get_meta("bonus_tween") == banner_tween
-			and widgets.count.text.begins_with("×3\n"), "continuation pulses count without restarting the banner")
+		check(widgets.count.text == "3", "chain length is not a score multiplier")
 		hit(sample.keeper, 2, 3.0, 1, B)
 		sample._update_bonus_progress()
-		check(widgets.progress.modulate.a == 0.0 and widgets.count.text.is_empty(), "broken chain hides its indicator")
-		sample._show_bonus_feedback(hit(sample.keeper, 2, 4.0, 1, B))
+		check(not widgets.progress.get_meta("hud_active") and widgets.count.text == "0", "broken chain returns to neutral")
+		hit(sample.keeper, 2, 4.0, 1, B)
 		sample._update_bonus_progress()
 		check(widgets.gem.texture == BoardView.GEM_TEX[1], "indicator switches to new active color")
-		sample.score = sample.keeper.score
-		sample.shown_score = sample.score
-		sample._set_hud_number(sample.score_label, sample.score)
-		sample.play_time = 4.0
-		sample._update_combo_widget()
-		sample._update_hud()
-		for id in ["classic", "classic_android"]:
-			for event in ["double_hit", "color_streak"]:
-				sample.hud_sets[id].bonus[event].get_meta("bonus_tween").pause()
 		for language in ["ru", "en", "tr"]:
 			main.get_node("/root/L").set_language(language)
 			sample._update_bonus_progress()
 			for i in 4:
 				await tree.process_frame
-			check(widgets.count.text == "×2\n" + main.get_node("/root/L").t("color_streak_chain"),
-				"localized chain length, not a score multiplier " + language)
-			for control in [widgets.progress, widgets.gem, widgets.count, widgets.double_hit, widgets.color_streak]:
+			check(widgets.count.text == "2" and widgets.caption.text == main.get_node("/root/L").t("color_streak_chain"),
+				"localized chain caption with unambiguous length " + language)
+			for control in [widgets.progress, widgets.gem, widgets.count]:
 				check(Rect2(Vector2.ZERO, Vector2(vp.size)).encloses(control.get_global_rect())
 					and not sample.board.get_global_rect().intersects(control.get_global_rect()),
 					"bonus HUD stays outside board %s %s" % [config, language])
-				check(control.mouse_filter == Control.MOUSE_FILTER_IGNORE, "bonus HUD cannot capture taps")
-			for label in [widgets.count, widgets.double_hit, widgets.color_streak]:
-				check(label.size.y >= label.get_combined_minimum_size().y
-					and label.get_visible_line_count() == label.get_line_count(), "bonus text fits all lines " + language)
-			var capture_dir := OS.get_environment("COLOR_CHAIN_CAPTURE_DIR")
-			if language == "ru" and not capture_dir.is_empty() and DisplayServer.get_name() != "headless":
-				await tree.create_timer(1.1).timeout  # Capture after the existing deal-in animation.
-				await RenderingServer.frame_post_draw
-				var capture_path := capture_dir.path_join("color_chain_%dx%d_%s.png" % [vp.size.x, vp.size.y, "android" if config[1] else "desktop"])
-				check(vp.get_texture().get_image().save_png(capture_path) == OK, "rendered chain HUD captured")
 		# Desktop clicks at different pixels of the same slot.
 		sample.keeper.reset()
 		sample.board.zoom_enabled = false

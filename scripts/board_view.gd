@@ -52,6 +52,10 @@ var frame_pad := 10.0
 var logic: BoardLogic
 var interactive := false
 var number_font: Font
+var feedback_font: Font
+var feedback_exclusion: Callable
+var classic_feedback := false
+var feedback_rects: Array[Rect2] = [] # Actual visible text bounds, useful for layout checks.
 var cell := 30.0
 var origin := Vector2.ZERO
 
@@ -326,6 +330,7 @@ func _deal_scale(i: int) -> float:
 
 
 func clear_fx() -> void:
+	feedback_rects.clear()
 	_flyers.clear(); _beams.clear(); _texts.clear(); _misses.clear(); _sparks.clear(); _waves.clear()
 	_shards.clear(); _pops.clear(); _praise.clear(); _confetti.clear()
 	_flash = 0.0
@@ -384,10 +389,153 @@ func play_knock(from: Vector2i, gone: Array[Vector2i], kinds: Array[int], points
 			_sparks.append({"p": h, "v": Vector2.from_angle(a) * cell * randf_range(2, 5 + mult), "t": 0.0,
 				"life": randf_range(0.35, 0.6), "s": randf_range(0.25, 0.5), "c": _spark_color(rainbow)})
 	var col: Color = TEXT_COLORS[clampi(mult, 1, 4) - 1]
+	if classic_feedback:
+		_texts.assign(_texts.filter(func(t): return t.get("slot", Vector2i(-1, -1)) != from))
 	_texts.append({"p": c, "s": "+%d" % points, "t": 0.0, "c": col, "k": 1.0 + (mult - 1) * 0.18})
+	if classic_feedback:
+		# Extend the existing score popup into one packet per hit. Logical coordinates
+		# are resolved each frame, so zoom, pan and resizing cannot leave text behind.
+		_texts[-1].merge({"slot": from, "life": 0.55, "rows": [{"s": "+%d" % points, "c": col}],
+			"chain": -1, "double": false, "started": false, "special": rainbow})
+		if not rainbow and not _praise.is_empty():
+			_texts[-1].rows.push_front({"s": _praise[-1].s, "c": _praise[-1].c})
+		_praise.clear() # Generic praise shares this packet, so it cannot appear late.
+		while _texts.size() > 3:
+			_texts.pop_front()
 	_hint = Vector2i(-1, -1)
 	_trim_refined_fx()
 	queue_redraw()  # gems were removed
+
+
+## Attach awarded bonus values to that hit's existing score popup; never score in the view.
+func play_bonus_feedback(at: Vector2i, result: Dictionary, kind: int, count: int,
+		start_title: String, chain_title: String, double_title: String, total_title := "") -> void:
+	if not classic_feedback or _texts.is_empty():
+		return
+	var packet: Dictionary = _texts[-1]
+	if packet.get("slot", Vector2i(-1, -1)) != at:
+		return
+	var rows: Array = []
+	if int(result.color_streak_points) > 0:
+		packet.chain = kind
+		packet.started = bool(result.color_streak_started)
+		packet.life = 0.72 if packet.started else 0.5
+		rows.append({"s": "%s  +%d" % [start_title if packet.started else chain_title, result.color_streak_points],
+			"c": _col(kind).lightened(0.38), "gem": kind})
+	if int(result.double_hit_points) > 0:
+		packet.double = true
+		rows.append({"s": "%s  +%d" % [double_title, result.double_hit_points], "c": LIGHT_FX, "secondary": not rows.is_empty()})
+	if not rows.is_empty():
+		# Keep the original total below the itemised bonuses. No extra score popup.
+		rows.append({"s": packet.s if total_title.is_empty() else total_title, "c": packet.c, "total": true})
+		packet.rows = rows
+		packet.chain_length = count
+		_praise.clear() # Generic praise yields to the named rewards from this hit.
+	_fx.queue_redraw()
+
+
+func clear_combo_feedback() -> void:
+	_texts.assign(_texts.filter(func(t): return not t.has("slot")))
+	feedback_rects.clear()
+	if classic_feedback:
+		_praise.clear()
+
+
+func _feedback_blocked() -> Rect2:
+	return feedback_exclusion.call() if feedback_exclusion.is_valid() else Rect2()
+
+
+func _feedback_row_size(row: Dictionary, base: int) -> int:
+	return maxi(10, base - (3 if row.get("total", false) or row.get("secondary", false) else 0))
+
+
+## Lay out the whole packet at once; try nearby free zones, then the safe board edges.
+## Newest hits win. Older packets without a free rectangle are omitted, never queued.
+func _feedback_layout(packet: Dictionary, occupied: Array[Rect2]) -> Dictionary:
+	var safe := Rect2(Vector2(6, 6), size - Vector2(12, 12))
+	var fs := int(clampf(cell * 0.56, 14.0, 22.0))
+	if packet.started and not packet.special:
+		fs += 2
+	var font := feedback_font if feedback_font else number_font
+	var width := 0.0
+	for row in packet.rows:
+		width = maxf(width, font.get_string_size(row.s, HORIZONTAL_ALIGNMENT_LEFT, -1, _feedback_row_size(row, fs)).x + (fs + 5 if row.has("gem") else 0))
+	if width + 12 > safe.size.x:
+		fs = maxi(9, floori(fs * (safe.size.x - 12) / width))
+		width = 0.0
+		for row in packet.rows:
+			width = maxf(width, font.get_string_size(row.s, HORIZONTAL_ALIGNMENT_LEFT, -1, _feedback_row_size(row, fs)).x + (fs + 5 if row.has("gem") else 0))
+	var line := ceilf(font.get_height(fs)) + 2.0
+	var extent := Vector2(ceilf(width) + 12, line * packet.rows.size() + 8)
+	var center := slot_center(packet.slot)
+	var rise: float = minf(16.0, cell * 0.5) * packet.t / packet.life
+	var gap := minf(cell * 0.65, 24.0)
+	var candidates: Array[Vector2] = [
+		center + Vector2(-extent.x * 0.5, -gap - extent.y - rise),
+		center + Vector2(-extent.x * 0.5, gap - rise),
+		center + Vector2(gap, -extent.y * 0.5 - rise),
+		center + Vector2(-gap - extent.x, -extent.y * 0.5 - rise),
+		Vector2(center.x - extent.x * 0.5, safe.position.y),
+		Vector2(center.x - extent.x * 0.5, safe.end.y - extent.y)]
+	for candidate in candidates:
+		var pos := Vector2(clampf(candidate.x, safe.position.x, maxf(safe.position.x, safe.end.x - extent.x)),
+			clampf(candidate.y, safe.position.y, maxf(safe.position.y, safe.end.y - extent.y)))
+		var rect := Rect2(pos, extent)
+		if safe.encloses(rect) and not occupied.any(func(other): return other.grow(4).intersects(rect)):
+			return {"rect": rect, "font_size": fs, "line": line}
+	return {}
+
+
+func _draw_classic_feedback() -> void:
+	feedback_rects.clear()
+	if not number_font:
+		return
+	var occupied: Array[Rect2] = []
+	var exclusion := _feedback_blocked()
+	if exclusion.has_area():
+		occupied.append(exclusion)
+	var font := feedback_font if feedback_font else number_font
+	for i in range(_texts.size() - 1, -1, -1):
+		var packet: Dictionary = _texts[i]
+		if not packet.has("slot"):
+			continue
+		var center := slot_center(packet.slot)
+		var q: float = packet.t / packet.life
+		var alpha := clampf((1.0 - q) * 2.8, 0.0, 1.0)
+		var weight := 0.5 if exclusion.has_area() else 1.0
+		# A smooth coloured ring for chains; two short opposing slashes for Double Hit.
+		if packet.chain >= 0 and packet.t < 0.42:
+			var phase: float = packet.t / 0.42
+			var radius := cell * (0.35 + phase * (1.0 if packet.started else 0.55))
+			_fx.draw_arc(center, radius, 0, TAU, 40, Color(_col(packet.chain).lightened(0.25), (1.0 - phase) * weight), 2.0, true)
+		if packet.double and packet.t < 0.22:
+			var sharp: float = 1.0 - packet.t / 0.22
+			for side in [-1, 1]:
+				var p := center + Vector2(side * cell * (0.35 + (1.0 - sharp) * 0.45), 0)
+				_fx.draw_line(p + Vector2(-cell * 0.12, cell * 0.24), p + Vector2(cell * 0.12, -cell * 0.24), Color(LIGHT_FX, sharp * weight), 3.0, true)
+		var layout := _feedback_layout(packet, occupied)
+		if layout.is_empty():
+			continue
+		var rect: Rect2 = layout.rect
+		occupied.append(rect)
+		feedback_rects.append(rect)
+		var fs: int = layout.font_size
+		# Text uses board-local coordinates without shake, and always stays inside it.
+		_fx.draw_set_transform(Vector2.ZERO)
+		for row_index in packet.rows.size():
+			var row: Dictionary = packet.rows[row_index]
+			var row_size := _feedback_row_size(row, fs)
+			var row_width := font.get_string_size(row.s, HORIZONTAL_ALIGNMENT_LEFT, -1, row_size).x
+			var icon_space := float(fs + 5) if row.has("gem") else 0.0
+			var x := rect.get_center().x - (row_width + icon_space) * 0.5
+			var y: float = rect.position.y + 4 + layout.line * row_index
+			if row.has("gem"):
+				_fx.draw_texture_rect(_tex(row.gem), Rect2(Vector2(x, y + (layout.line - fs) * 0.5), Vector2.ONE * fs), false, Color(1, 1, 1, alpha))
+			var pos := Vector2(x + icon_space, y + font.get_ascent(row_size))
+			var opacity := alpha * (0.7 if row.get("total", false) else 1.0)
+			_fx.draw_string_outline(font, pos, row.s, HORIZONTAL_ALIGNMENT_LEFT, -1, row_size, 4, Color(0.02, 0.05, 0.06, opacity))
+			_fx.draw_string(font, pos, row.s, HORIZONTAL_ALIGNMENT_LEFT, -1, row_size, Color(row.c, opacity))
+		_fx.draw_set_transform(_shake_off)
 
 
 ## Ice breaking off thawed gems: pale shards.
@@ -576,7 +724,7 @@ func _age(list: Array[Dictionary], delta: float, life: float) -> void:
 		return
 	for e in list:
 		e.t += delta
-	var keep := list.filter(func(e): return e.t < life)
+	var keep := list.filter(func(e): return e.t < e.get("life", life))
 	list.assign(keep)
 
 
@@ -737,6 +885,8 @@ func _draw_fx() -> void:
 		c.draw_line(m.p + Vector2(q, -q), m.p + Vector2(-q, q), Color(MISS, a), 3.0)
 	if number_font:
 		for t in _texts:
+			if t.has("slot"):
+				continue
 			var a: float = 1.0 - t.t / 0.9
 			var pop: float = 1.0 + 0.35 * maxf(0.0, 1.0 - t.t / 0.15)
 			var fs := int(maxf(16.0, cell * 0.75) * t.k * pop)
@@ -747,6 +897,8 @@ func _draw_fx() -> void:
 			c.draw_string(number_font, p, t.s, HORIZONTAL_ALIGNMENT_CENTER, cell * 4, fs, Color(t.c, a))
 	if number_font:
 		for pr in _praise:
+			if classic_feedback and (not _texts.is_empty() or _feedback_blocked().has_area()):
+				continue
 			var q: float = pr.t / 1.1
 			var a: float = clampf((1.0 - q) * 2.5, 0.0, 1.0)
 			var pop: float = 1.0 + 0.5 * maxf(0.0, 1.0 - pr.t / 0.12)
@@ -757,6 +909,7 @@ func _draw_fx() -> void:
 			var pos: Vector2 = Vector2(clampf(pr.p.x - w / 2, -w / 2 + size.x / 2, size.x / 2 - w / 2), pr.p.y - cell * 0.8 - q * cell * 1.8)
 			c.draw_string_outline(number_font, pos, pr.s, HORIZONTAL_ALIGNMENT_CENTER, w, fs, 2 if _refined() else int(fs * 0.22), Color(0.05, 0.05, 0.15, a))
 			c.draw_string(number_font, pos, pr.s, HORIZONTAL_ALIGNMENT_CENTER, w, fs, Color(pr.c, a))
+	_draw_classic_feedback()
 	if _clear_t < 1.6:
 		var cc := Vector2(logic.cols - 1, logic.rows - 1) / 2.0
 		var far := cc.length() + 1.0
@@ -885,8 +1038,14 @@ func _zoom_input(event: InputEvent) -> bool:
 
 ## Keep the keyboard cursor on the same slot after a transpose.
 func transposed() -> void:
+	var packets: Array[Dictionary] = []
+	for text in _texts:
+		if text.has("slot"):
+			text.slot = Vector2i(text.slot.y, text.slot.x)
+			packets.append(text)
 	if _cursor.x >= 0:
 		_cursor = Vector2i(_cursor.y, _cursor.x)
 	_hover = Vector2i(-1, -1)
 	reset_zoom()
 	clear_fx()
+	_texts.append_array(packets)

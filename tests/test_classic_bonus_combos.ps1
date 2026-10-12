@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory=$true)][string]$Godot,
     [string]$FixtureRoot = (Join-Path ([System.IO.Path]::GetTempPath()) ('bizarre-gems-bonus-' + [guid]::NewGuid().ToString('N'))),
-    [string[]]$Suites = @('test_classic_bonus_combos','test_classic_balance','test_special_combo','test_strike_accounting','test_bright_run','test_mode_transition','test_visual_unification')
+    [string[]]$Suites = @('test_classic_bonus_combos','test_classic_feedback','test_classic_balance','test_special_combo','test_strike_accounting','test_bright_run','test_mode_transition','test_visual_unification'),
+    [switch]$Render
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
@@ -49,7 +50,7 @@ func _verify() -> void:
 '@
 [System.IO.File]::WriteAllText((Join-Path $fixture 'tests/verify_color_fixture.gd'), $preflight, $utf8)
 $import = Start-Process -FilePath $Godot -WorkingDirectory $fixture -ArgumentList @('--headless','--path',('"' + $fixture + '"'),'--editor','--import','--quit') -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput (Join-Path $fixture 'import.log') -RedirectStandardError (Join-Path $fixture 'import_errors.log')
-if ($import.ExitCode -ne 0) { throw 'Fixture import failed; see import_errors.log.' }
+if ($import.ExitCode -ne 0 -or (Select-String -LiteralPath (Join-Path $fixture 'import_errors.log') -Pattern '^(SCRIPT ERROR|ERROR):')) { throw 'Fixture import failed; see import_errors.log.' }
 $env:BONUS_FIXTURE_ROOT = $fixture.Replace('\','/')
 $verify = Start-Process -FilePath $Godot -WorkingDirectory $fixture -ArgumentList @('--headless','--path',('"' + $fixture + '"'),'--script','res://tests/verify_color_fixture.gd') -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput (Join-Path $fixture 'isolation.log') -RedirectStandardError (Join-Path $fixture 'isolation_errors.log')
 Remove-Item Env:\BONUS_FIXTURE_ROOT
@@ -61,7 +62,7 @@ foreach ($suite in $Suites) {
     $source = Get-Content -LiteralPath (Join-Path $fixture ('tests/' + $suite + '.gd')) -Raw
     $script = if ($source.StartsWith('extends SceneTree')) { 'res://tests/' + $suite + '.gd' } else { 'res://tests/run_runtime_suite.gd' }
     # This regression explicitly requires a real canvas and desktop audio driver.
-    [string[]]$driverArgs = if ($suite -eq 'test_mode_transition') { @('--audio-driver','WASAPI') } else { @('--headless') }
+    [string[]]$driverArgs = if ($Render -or $suite -eq 'test_mode_transition') { @('--audio-driver','WASAPI') } else { @('--headless') }
     $run = Start-Process -FilePath $Godot -WorkingDirectory $fixture -ArgumentList (@($driverArgs) + @('--path',('"' + $fixture + '"'),'--script',$script,'--',('--suite=' + $suite))) -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput (Join-Path $fixture ($suite + '.log')) -RedirectStandardError (Join-Path $fixture ($suite + '_errors.log'))
     Write-Output ($suite + ': exit ' + $run.ExitCode)
     $runtimeErrors = Select-String -LiteralPath (Join-Path $fixture ($suite + '_errors.log')) -Pattern '^(SCRIPT ERROR|ERROR):'

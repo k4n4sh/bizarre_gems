@@ -166,6 +166,9 @@ var f_body: Font
 var f_bold: Font
 var f_num: Font
 
+const HudStatSlot = preload("res://scripts/hud_stat_slot.gd")
+const HUD_IDLE := Color(0.47, 0.59, 0.65, 0.72)
+
 var board: BoardView
 var hud: HBoxContainer
 var title_label: Label
@@ -1093,7 +1096,7 @@ func _on_slot(p: Vector2i) -> void:
 		board.play_wave(p, 2.0, true)
 		board.play_burst(p, 40)
 		board.flash(BRASS_LIGHT, 0.22)
-		_banner(L.t("precise"), ScoreKeeper.PRECISE_POINTS, ScoreKeeper.PRECISE_TIME, BRASS_LIGHT)
+		_banner(L.t("precise"), ScoreKeeper.PRECISE_POINTS, ScoreKeeper.PRECISE_TIME, BRASS_LIGHT, "", 2)
 		if mode.skin == "bright":
 			board.play_confetti(50)
 		if mode.id != "bright" or daily:
@@ -1108,7 +1111,7 @@ func _on_slot(p: Vector2i) -> void:
 		board.play_burst(p, 90)
 		board.flash(Color.WHITE, 0.4)
 		board.shake(0.3)
-		_banner(L.t("perfect"), ScoreKeeper.PERFECT_POINTS, ScoreKeeper.PERFECT_TIME, Color("#ff9ed2"))
+		_banner(L.t("perfect"), ScoreKeeper.PERFECT_POINTS, ScoreKeeper.PERFECT_TIME, Color("#ff9ed2"), "", 3)
 		if not _ab_active:
 			Progress.report("perfects")
 		if mode.skin == "bright":
@@ -1119,7 +1122,7 @@ func _on_slot(p: Vector2i) -> void:
 	if palette_event:
 		_set_theme(_next_look())  # A special and a streak threshold on one strike count once.
 	_update_combo_widget(res.tier_up)
-	_show_bonus_feedback(res)
+	_show_bonus_feedback(res, p)
 	if autoplay and (event != "" or res.tier_up):
 		print("[autoplay] combo=%d mult=%d event=%s" % [res.combo, res.mult, event])
 		if event != "":
@@ -1873,6 +1876,8 @@ func _build() -> void:
 	board.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	board.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	board.number_font = f_num
+	board.feedback_font = f_bold
+	board.feedback_exclusion = _feedback_exclusion
 	col.add_child(board)
 	board.resized.connect(func(): _relayout_board.call_deferred())
 
@@ -1971,63 +1976,93 @@ func _build() -> void:
 	rotate_overlay = ro
 
 
-## Classic HUD, as in the first version: title, time with its bar, score, best, a small
-## combo counter, then pause / restart / settings.
+## A plain Control isolates dynamic content from the surrounding containers.
+func _stable_hud_slot(content: Control, minimum := Vector2.ZERO) -> Control:
+	var slot := HudStatSlot.new()
+	slot.name = "StatSlot"
+	slot.custom_minimum_size = minimum
+	slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slot.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	slot.add_child(content)
+	return slot
+
+
+## Classic has a single stable row, including the compact chain counter.
 func _build_classic_hud(col: VBoxContainer) -> void:
+	# Reserve only the row's height; its contents cannot resize the board column.
+	var header := Control.new()
+	header.custom_minimum_size.y = 64
+	header.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(header)
+	col.move_child(header, 0)
 	hud_classic = HBoxContainer.new()
-	hud_classic.add_theme_constant_override("separation", 18)
-	col.add_child(hud_classic)
-	col.move_child(hud_classic, 0)
+	header.add_child(hud_classic)
 	title_label = _label("", f_display, 30, BRASS)
-	title_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	hud_classic.add_child(title_label)
+	title_label.hide()
+	header.add_child(title_label)
 
 	var tbox := VBoxContainer.new()
 	tbox.add_theme_constant_override("separation", 3)
 	tbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tbox.size_flags_stretch_ratio = 2.0
-	tbox.custom_minimum_size.x = 110
+	tbox.custom_minimum_size.x = 104
 	time_caption = _caption("")
+	time_caption.add_theme_font_size_override("font_size", 12)
 	var tr := HBoxContainer.new()
 	tr.add_theme_constant_override("separation", 10)
 	var c_time := _label("120", f_num, 28)
-	var c_delta := _label("", f_num, 18, BRASS)
+	var c_delta := _label("", f_num, 14, BRASS)
 	c_delta.modulate.a = 0.0
 	tr.add_child(c_time)
-	tr.add_child(c_delta)
+	# Transient time rewards are an overlay, never part of the row's minimum width.
+	var delta_slot := _stable_hud_slot(c_delta)
+	c_time.add_child(delta_slot)
+	delta_slot.position = Vector2(55, 6)
+	delta_slot.size = Vector2(49, 28)
 	var c_bar := ProgressBar.new()
 	c_bar.show_percentage = false
-	c_bar.custom_minimum_size.y = 6
+	c_bar.custom_minimum_size.y = 4
 	c_bar.max_value = 100
 	tbox.add_child(time_caption)
 	tbox.add_child(tr)
 	tbox.add_child(c_bar)
-	hud_classic.add_child(tbox)
+	var time_slot := _stable_hud_slot(tbox, Vector2(112, 64))
+	hud_classic.add_child(time_slot)
 
 	var sbox := VBoxContainer.new()
 	sbox.add_theme_constant_override("separation", 3)
 	score_caption = _caption("")
+	score_caption.add_theme_font_size_override("font_size", 12)
 	var c_score := _label("0", f_num, 28)
 	sbox.add_child(score_caption)
 	sbox.add_child(c_score)
-	hud_classic.add_child(sbox)
+	var score_space := Control.new()
+	score_space.custom_minimum_size.y = 4
+	sbox.add_child(score_space)
+	var score_slot := _stable_hud_slot(sbox, Vector2(100, 64))
+	hud_classic.add_child(score_slot)
 	var bbox := VBoxContainer.new()
 	bbox.add_theme_constant_override("separation", 3)
 	best_caption = _caption("")
+	best_caption.add_theme_font_size_override("font_size", 12)
 	var c_best := _label("0", f_num, 28)
 	bbox.add_child(best_caption)
 	bbox.add_child(c_best)
-	hud_classic.add_child(bbox)
+	var best_space := Control.new()
+	best_space.custom_minimum_size.y = 4
+	bbox.add_child(best_space)
+	var best_slot := _stable_hud_slot(bbox, Vector2(100, 64))
+	hud_classic.add_child(best_slot)
 
 	var c_combo := PanelContainer.new()
 	var c_style := _box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0, Vector4.ZERO)
 	c_combo.add_theme_stylebox_override("panel", c_style)
-	c_combo.custom_minimum_size.x = 80
 	c_combo.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var ccv := VBoxContainer.new()
-	ccv.add_theme_constant_override("separation", 2)
+	ccv.add_theme_constant_override("separation", 3)
 	var c_count := _caption("")
-	var c_mult := _label("", f_display, 30, BRASS)
+	c_count.add_theme_font_size_override("font_size", 12)
+	var c_mult := _label("", f_num, 28, BRASS)
 	var c_cbar := ProgressBar.new()
 	c_cbar.show_percentage = false
 	c_cbar.custom_minimum_size.y = 4
@@ -2036,35 +2071,49 @@ func _build_classic_hud(col: VBoxContainer) -> void:
 	ccv.add_child(c_cbar)
 	c_combo.add_child(ccv)
 	c_combo.modulate.a = 0.0
-	hud_classic.add_child(c_combo)
+	var combo_slot := _stable_hud_slot(c_combo, Vector2(64, 64))
+	hud_classic.add_child(combo_slot)
 
 	var btns := HBoxContainer.new()
 	btns.add_theme_constant_override("separation", 8)
+	btns.alignment = BoxContainer.ALIGNMENT_END
 	btns.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var c_pause := _icon_button("pause", func(): Sfx.play("click"); pause_game())
 	var c_restart := _icon_button("restart", func(): Sfx.play("click"); start_game(mode.id, daily))
 	var c_settings := _icon_button("settings", _open_settings_from_hud)
 	btns.add_child(c_pause)
-	if _is_touch_device():
-		btns.add_child(c_settings)
-		btns.add_child(c_restart)
-	else:
-		btns.add_child(c_restart)
-		btns.add_child(c_settings)
-	hud_classic.add_child(btns)
-	hud_sets["classic"] = {"roots": [hud_classic], "score": c_score, "best": c_best, "time": c_time, "bar": c_bar,
+	btns.add_child(c_restart)
+	btns.add_child(c_settings)
+	var buttons_slot := _stable_hud_slot(btns, Vector2(172, 64))
+	buttons_slot.size_flags_horizontal = Control.SIZE_FILL
+	hud_classic.add_child(buttons_slot)
+	hud_sets["classic"] = {"roots": [header], "score": c_score, "best": c_best, "time": c_time, "bar": c_bar,
 		"delta": c_delta, "combo_box": c_combo, "combo_style": c_style, "combo_mult": c_mult, "combo_count": c_count,
 		"combo_bar": c_cbar, "pause": c_pause, "restart": c_restart, "settings": c_settings}
-	var bonus_row := HBoxContainer.new()
-	bonus_row.name = "ClassicBonusCombos"
-	bonus_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	bonus_row.add_theme_constant_override("separation", 16)
-	bonus_row.custom_minimum_size.y = 28
-	bonus_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	col.add_child(bonus_row)
-	col.move_child(bonus_row, 1)
-	hud_sets.classic.roots.append(bonus_row)
-	hud_sets.classic.bonus = _build_bonus_widgets(bonus_row, bonus_row, false)
+	hud_sets.classic.bonus = _build_bonus_widgets(hud_classic, false)
+	hud_classic.move_child(hud_sets.classic.bonus.slot, buttons_slot.get_index())
+	hud_sets.classic.slots = [time_slot, score_slot, best_slot, combo_slot, hud_sets.classic.bonus.slot]
+	for slot in hud_sets.classic.slots:
+		slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		slot.custom_minimum_size.y = 64
+	hud_sets.classic.buttons = buttons_slot
+
+
+func _layout_classic_header() -> void:
+	# Match the rendered frame, not the wider Control holding the centered board.
+	var header := hud_classic.get_parent() as Control
+	var left := maxf(0.0, board.origin.x - board.frame_pad)
+	var right := minf(board.size.x, board.origin.x + logic.cols * board.cell + board.frame_pad)
+	var width := maxf(1.0, right - left)
+	var gap := int(clampf(width * 0.015, 4.0, 16.0))
+	hud_classic.add_theme_constant_override("separation", gap)
+	var buttons_width := floorf(width * 0.22)
+	hud_sets.classic.buttons.custom_minimum_size.x = buttons_width
+	var stat_width := maxf(0.0, floorf((width - buttons_width - gap * 5) / 5.0))
+	for slot in hud_sets.classic.slots:
+		slot.custom_minimum_size.x = stat_width
+	hud_classic.position = Vector2(board.position.x - header.position.x + left, 0)
+	hud_classic.size = Vector2(width, 64)
 
 
 ## Android Classic keeps both side rails on every screen; all other HUDs stay intact.
@@ -2107,7 +2156,7 @@ func _build_classic_side_hud(col: VBoxContainer) -> void:
 	classic_sides.add_child(classic_stats)
 
 	var c_time := _side_label("120", f_num, 28)
-	var c_delta := _side_label("", f_num, 16, BRASS)
+	var c_delta := _side_label("", f_num, 12, BRASS)
 	c_delta.modulate.a = 0.0
 	var c_time_caption := _side_label("", f_bold, 12, MUTED)
 	c_time_caption.uppercase = true
@@ -2117,17 +2166,24 @@ func _build_classic_side_hud(col: VBoxContainer) -> void:
 	c_bar.custom_minimum_size.y = 6
 	c_bar.max_value = 100
 	timer.add_child(c_bar)
-	timer.add_child(c_delta)
-	classic_stats.add_child(timer)
+	# Reserve no layout space for the short-lived delta; anchor it below the timer.
+	c_delta.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	c_delta.position.y = 7
+	c_delta.grow_vertical = Control.GROW_DIRECTION_END
+	c_bar.add_child(c_delta)
+	var timer_slot := _stable_hud_slot(timer)
+	# Leave room for the delta even on short displays, without moving the timer's centre.
+	timer_slot.vertical_padding = 18.0
+	classic_stats.add_child(timer_slot)
 
 	var c_score := _side_label("0", f_num, 24)
 	var c_score_caption := _side_label("", f_bold, 12, MUTED)
 	c_score_caption.uppercase = true
-	classic_stats.add_child(_side_stat(c_score_caption, c_score))
+	classic_stats.add_child(_stable_hud_slot(_side_stat(c_score_caption, c_score)))
 	var c_best := _side_label("0", f_num, 24)
 	var c_best_caption := _side_label("", f_bold, 12, MUTED)
 	c_best_caption.uppercase = true
-	classic_stats.add_child(_side_stat(c_best_caption, c_best))
+	classic_stats.add_child(_stable_hud_slot(_side_stat(c_best_caption, c_best)))
 
 	var c_combo := PanelContainer.new()
 	var c_style := _box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0, Vector4.ZERO)
@@ -2145,7 +2201,7 @@ func _build_classic_side_hud(col: VBoxContainer) -> void:
 	combo.add_child(c_cbar)
 	c_combo.add_child(combo)
 	c_combo.modulate.a = 0.0
-	classic_stats.add_child(c_combo)
+	classic_stats.add_child(_stable_hud_slot(c_combo))
 
 	classic_actions = VBoxContainer.new()
 	classic_actions.name = "Actions"
@@ -2164,17 +2220,22 @@ func _build_classic_side_hud(col: VBoxContainer) -> void:
 		"delta": c_delta, "combo_box": c_combo, "combo_style": c_style, "combo_mult": c_mult, "combo_count": c_count,
 		"combo_bar": c_cbar, "pause": c_pause, "restart": c_restart, "settings": c_settings,
 		"captions": {"time": c_time_caption, "score": c_score_caption, "best": c_best_caption}}
-	hud_sets.classic_android.bonus = _build_bonus_widgets(classic_stats, classic_actions, true)
+	hud_sets.classic_android.bonus = _build_bonus_widgets(classic_stats, true)
 
 
-## Compact score-only feedback, in the HUD rather than over playable cells.
-func _build_bonus_widgets(progress_parent: BoxContainer, event_parent: BoxContainer, sides: bool) -> Dictionary:
+## Informational chain counter. Its stable slot isolates all text/texture minimum sizes.
+func _build_bonus_widgets(progress_parent: Control, sides: bool) -> Dictionary:
+	var block := VBoxContainer.new()
+	block.add_theme_constant_override("separation", 2 if sides else 3)
+	var caption := _side_label("", f_bold, 12, MUTED)
+	caption.uppercase = true
+	block.add_child(caption)
 	var progress := HBoxContainer.new()
 	progress.name = "ColorStreakProgress"
 	progress.alignment = BoxContainer.ALIGNMENT_CENTER
 	progress.add_theme_constant_override("separation", 4)
 	progress.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	progress_parent.add_child(progress)
+	block.add_child(progress)
 	var gem := TextureRect.new()
 	gem.custom_minimum_size = Vector2(18, 18)
 	gem.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -2182,32 +2243,23 @@ func _build_bonus_widgets(progress_parent: BoxContainer, event_parent: BoxContai
 	gem.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	gem.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	progress.add_child(gem)
-	var count := _label("", f_num, 11 if sides else 14, MUTED)
+	var count := _label("0", f_num, 24 if sides else 28, CREAM)
 	count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	progress.add_child(count)
-	progress.modulate.a = 0.0
-	progress.visible = not sides
-	var events: BoxContainer = VBoxContainer.new() if sides else HBoxContainer.new()
-	events.name = "BonusEvents"
-	events.add_theme_constant_override("separation", 4 if sides else 16)
-	events.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	events.visible = not sides
-	event_parent.add_child(events)
-	var double_hit := _label("DOUBLE HIT!", f_bold, 12 if sides else 14, BRASS_LIGHT)
-	var color_streak := _label("COLOR STREAK!", f_bold, 12 if sides else 14, CREAM)
-	for label in [double_hit, color_streak]:
-		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		if sides:
-			label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			label.custom_minimum_size.y = 34
-		var parent: BoxContainer = progress_parent if sides and label == double_hit else events
-		parent.add_child(label)
-		label.modulate.a = 0.0
-		label.visible = not sides
-	return {"progress": progress, "gem": gem, "count": count, "events": events,
-		"double_hit": double_hit, "color_streak": color_streak}
+	gem.texture = BoardView.GEM_TEX[6] # Neutral silver gem while inactive.
+	var slot := _stable_hud_slot(block)
+	progress_parent.add_child(slot)
+	if not sides:
+		# Same caption/value baseline as the four other header statistics.
+		caption.autowrap_mode = TextServer.AUTOWRAP_OFF
+		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		progress.alignment = BoxContainer.ALIGNMENT_BEGIN
+		var bar_space := Control.new()
+		bar_space.custom_minimum_size.y = 4
+		block.add_child(bar_space)
+	block.modulate = HUD_IDLE
+	return {"progress": block, "gem": gem, "count": count, "caption": caption, "slot": slot}
 
 
 func _set_classic_side_layout(enabled: bool) -> void:
@@ -2247,6 +2299,13 @@ func _layout_classic_sides(view: Vector2, insets: Rect2) -> void:
 	board.custom_maximum_size.x = board_width
 	classic_stats.custom_minimum_size.x = content
 	classic_actions.custom_minimum_size.x = content
+	# Five equal slots form one composition. Slot 3 and the middle action share the
+	# same parent centre, regardless of any caption, value, progress bar or tween.
+	var gap := roundi(clampf(safe_height * 0.016, 4.0, 8.0))
+	# Whole-pixel equal heights prevent VBox rounding its five shares differently.
+	var slot_height := minf(74.0, floorf((safe_height - 16.0 - 4.0 * gap) / 10.0) * 2.0)
+	classic_stats.add_theme_constant_override("separation", gap)
+	classic_stats.custom_minimum_size.y = 5.0 * slot_height + 4.0 * gap
 	# Center each compact HUD block between the screen edge and the board frame.
 	# The outer margin and the gap to the board are both 4 px.
 	for block in classic_stats.get_children():
@@ -2328,6 +2387,7 @@ func _apply_hud(id: String) -> void:
 	btn_restart = set.restart
 	btn_settings = set.settings
 	_set_classic_side_layout(id == "classic_android")
+	board.classic_feedback = mode.id == "classic"
 
 
 ## Keep Bright's two-row geometry: _dims() uses the remaining board area.
@@ -3682,14 +3742,30 @@ func _apply_texts() -> void:
 	ui.chk_voice.text = L.t("voice")
 	ui.btn_settings_done.text = L.t("done")
 	ui.rotate_label.text = L.t("rotate")
+	if mode.id == "classic":
+		_update_combo_widget()
+		_update_bonus_progress()
 	_fit_panels.call_deferred()
 
 
 ## Little scale bump for HUD numbers.
 func _pop(c: Control, k := 1.25) -> void:
+	if mode.id == "classic" and c in [score_label, time_label]:
+		_pulse_hud_value(c, k)
+		return
 	c.pivot_offset = Vector2(0, c.size.y / 2)
 	c.scale = Vector2.ONE * k
 	create_tween().tween_property(c, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func _pulse_hud_value(label: Control, strength := 1.3) -> void:
+	var previous: Tween = label.get_meta("hud_pulse") if label.has_meta("hud_pulse") else null
+	if previous and previous.is_valid():
+		previous.kill()
+	label.modulate = Color(strength, strength, strength)
+	var pulse := create_tween()
+	pulse.tween_property(label, "modulate", Color.WHITE, 0.22)
+	label.set_meta("hud_pulse", pulse)
 
 
 func _show_panel(p: Control) -> void:
@@ -3784,6 +3860,9 @@ func _flash_delta(text: String, negative: bool, unit := "time") -> void:
 		time_delta.text = text + " " + L.t("steps_unit")
 	else:
 		time_delta.text = text + (" с" if L.lang == "ru" else (" sn" if L.lang == "tr" else " s"))
+	if mode.id == "classic":
+		# An overlay label can retain the old theme's taller rect after reparenting.
+		time_delta.size.y = time_delta.get_combined_minimum_size().y
 	time_delta.add_theme_color_override("font_color", DANGER if negative else BRASS)
 	time_delta.modulate.a = 1.0
 	var tw := create_tween()
@@ -3801,6 +3880,23 @@ func _toast(text: String) -> void:
 
 # ================= combo UI =================
 
+## Change only appearance: these controls remain in their fixed slots at all times.
+func _hud_activity(control: Control, active: bool, idle: Color) -> void:
+	if control.has_meta("hud_active") and control.get_meta("hud_active") == active:
+		return
+	control.set_meta("hud_active", active)
+	var previous: Tween = control.get_meta("activity_tween") if control.has_meta("activity_tween") else null
+	if previous and previous.is_valid():
+		previous.kill()
+	var target := Color.WHITE if active else idle
+	if active:
+		control.modulate = target
+	else:
+		var fade := create_tween()
+		fade.tween_property(control, "modulate", target, 0.25)
+		control.set_meta("activity_tween", fade)
+
+
 func _update_bonus_progress() -> void:
 	var active: bool = keeper.classic_bonus_combos and mode.id == "classic" and keeper.color_streak_hits >= 2 \
 		and state in [State.PLAYING, State.PAUSED]
@@ -3808,97 +3904,81 @@ func _update_bonus_progress() -> void:
 		if not hud_sets.has(id) or not hud_sets[id].has("bonus"):
 			continue
 		var widgets: Dictionary = hud_sets[id].bonus
-		widgets.progress.modulate.a = 1.0 if active and keeper.color_streak_kind >= 0 else 0.0
-		if id == "classic_android":
-			widgets.progress.visible = active and keeper.color_streak_kind >= 0
-		if keeper.color_streak_kind >= 0 and keeper.color_streak_kind < BoardView.GEM_TEX.size():
-			widgets.gem.texture = BoardView.GEM_TEX[keeper.color_streak_kind]
-		widgets.count.text = ("×%d\n%s" % [keeper.color_streak_hits, L.t("color_streak_chain")]) if active else ""
+		_hud_activity(widgets.progress, active, HUD_IDLE)
+		widgets.caption.text = L.t("color_streak_chain")
+		widgets.gem.texture = BoardView.GEM_TEX[keeper.color_streak_kind if active else 6]
+		widgets.count.text = str(keeper.color_streak_hits) if active else "0"
 
 
-func _show_bonus_feedback(res: Dictionary) -> void:
+func _show_bonus_feedback(res: Dictionary, at: Vector2i) -> void:
 	if not keeper.classic_bonus_combos:
 		return
-	for id in ["classic", "classic_android"]:
-		var widgets: Dictionary = hud_sets[id].bonus
-		if int(res.color_streak_points) > 0:
-			# Continuation pulses the count without expanding into the board or repeating a banner.
-			var count: Label = widgets.count
-			var previous_pulse: Tween = count.get_meta("color_chain_tween") if count.has_meta("color_chain_tween") else null
-			if previous_pulse and previous_pulse.is_valid():
-				previous_pulse.kill()
-			count.modulate = Color(1.4, 1.4, 1.4)
+	# All values come from the completed hit. Presentation never calculates rewards.
+	board.play_bonus_feedback(at, res, keeper.color_streak_kind, keeper.color_streak_hits,
+		L.t("color_chain_start"), L.t("color_chain_length", {"n": keeper.color_streak_hits}), L.t("double_hit"),
+		L.t("hit_total", {"n": res.points}))
+	if int(res.color_streak_points) > 0:
+		for id in ["classic", "classic_android"]:
+			var count: Label = hud_sets[id].bonus.count
+			var previous: Tween = count.get_meta("color_chain_tween") if count.has_meta("color_chain_tween") else null
+			if previous and previous.is_valid():
+				previous.kill()
+			count.modulate = Color(1.35, 1.35, 1.35)
 			var pulse := create_tween()
 			pulse.tween_property(count, "modulate", Color.WHITE, 0.2)
 			count.set_meta("color_chain_tween", pulse)
-		for event in ["double_hit", "color_streak"]:
-			if event == "color_streak" and not bool(res.color_streak_started):
-				continue
-			if int(res[event + "_points"]) > 0:
-				var label: Label = widgets[event]
-				var previous: Tween = label.get_meta("bonus_tween") if label.has_meta("bonus_tween") else null
-				if previous and previous.is_valid():
-					previous.kill()
-				label.modulate.a = 1.0
-				label.visible = true
-				if id != "classic_android" or event == "color_streak":
-					widgets.events.visible = true
-				var tw := create_tween()
-				tw.tween_interval(0.8)
-				tw.tween_property(label, "modulate:a", 0.0, 0.25)
-				if id == "classic_android":
-					tw.tween_callback(func():
-						label.visible = false
-						if event == "color_streak":
-							widgets.events.visible = false)
-				label.set_meta("bonus_tween", tw)
 
 
 func _reset_bonus_feedback() -> void:
 	keeper.reset_bonus_combos()
+	if board:
+		board.clear_combo_feedback()
+	if banner_box and mode.id == "classic":
+		var previous: Tween = banner_box.get_meta("banner_tween") if banner_box.has_meta("banner_tween") else null
+		if previous and previous.is_valid():
+			previous.kill()
+		banner_box.modulate.a = 0.0
 	for id in ["classic", "classic_android"]:
 		if not hud_sets.has(id) or not hud_sets[id].has("bonus"):
 			continue
-		var widgets: Dictionary = hud_sets[id].bonus
-		widgets.progress.modulate.a = 0.0
-		var count: Label = widgets.count
+		var count: Label = hud_sets[id].bonus.count
 		var pulse: Tween = count.get_meta("color_chain_tween") if count.has_meta("color_chain_tween") else null
 		if pulse and pulse.is_valid():
 			pulse.kill()
 		count.modulate = Color.WHITE
-		count.text = ""
-		if id == "classic_android":
-			widgets.progress.visible = false
-			widgets.events.visible = false
-		for event in ["double_hit", "color_streak"]:
-			var label: Label = widgets[event]
-			var previous: Tween = label.get_meta("bonus_tween") if label.has_meta("bonus_tween") else null
-			if previous and previous.is_valid():
-				previous.kill()
-			label.modulate.a = 0.0
-			if id == "classic_android":
-				label.visible = false
+	_update_bonus_progress()
+
+
+## Keep secondary field feedback clear of the actual animated Precise/Perfect banner.
+func _feedback_exclusion() -> Rect2:
+	if not banner_box or banner_box.modulate.a <= 0.03:
+		return Rect2()
+	var transform := board.get_global_transform().affine_inverse() * banner_box.get_global_transform()
+	return (transform * Rect2(Vector2.ZERO, banner_box.size)).grow(12.0)
 
 
 func _update_combo_widget(pulse := false) -> void:
 	combo_bar.value = keeper.window_left(play_time) / keeper.combo_window * 100.0
 	var c := keeper.combo
-	if c < 2:
+	var classic: bool = mode.id == "classic"
+	if c < 2 and not classic:
 		combo_box.modulate.a = 0.0
 		return
-	var m := ScoreKeeper.multiplier_for(c)
-	combo_count.text = L.t("combo_count", {"n": c})
+	var m := ScoreKeeper.multiplier_for(c) if c >= 2 else 1
+	combo_count.text = L.t("streak_caption") if classic else L.t("combo_count", {"n": c})
 	if visual_profile in ["classic", "classic_run"]:
 		combo_mult.text = ("×%d" % m) if mode.id == "classic" else ("×%d · %d" % [m, c])
 		combo_mult.add_theme_color_override("font_color", COMBO_COLORS[clampi(m, 1, 4) - 1].lightened(0.3))
 	else:
 		combo_mult.text = "%s ×%d · %d" % [L.t("combo").to_upper(), m, c]
 		combo_style.bg_color = COMBO_COLORS[clampi(m, 1, 4) - 1]
-	combo_box.modulate.a = 1.0
-	if pulse and _classic_android_sides():
+	if classic:
+		_hud_activity(combo_box, c >= 2, HUD_IDLE)
+	else:
+		combo_box.modulate.a = 1.0
+	if pulse and classic:
 		# Pulse colour without expanding the rail into the board or a display cutout.
-		combo_mult.modulate = Color(1.3, 1.3, 1.3)
-		create_tween().tween_property(combo_mult, "modulate", Color.WHITE, 0.3)
+		_pulse_hud_value(combo_mult)
 	elif pulse:
 		combo_box.pivot_offset = combo_box.size / 2
 		combo_box.scale = Vector2.ONE * 1.35
@@ -3906,13 +3986,23 @@ func _update_combo_widget(pulse := false) -> void:
 
 
 func _combo_break() -> void:
+	if mode.id == "classic":
+		_update_combo_widget()
+		return
 	if mode.skin == "bright":
 		Sfx.play("combo_break", 1.0, -6.0)
 	var tw := create_tween()
 	tw.tween_property(combo_box, "modulate:a", 0.0, 0.35)
 
 
-func _banner(title: String, pts: int, secs: float, color: Color, sub := "") -> void:
+func _banner(title: String, pts: int, secs: float, color: Color, sub := "", priority := 0) -> void:
+	if mode.id == "classic" and banner_box.has_meta("banner_tween"):
+		if banner_box.modulate.a > 0.03 and int(banner_box.get_meta("priority", 0)) > priority:
+			return # Perfect remains the main event; secondary rewards still show locally.
+		var previous: Tween = banner_box.get_meta("banner_tween")
+		if previous and previous.is_valid():
+			previous.kill()
+	banner_box.set_meta("priority", priority)
 	banner_title.text = title
 	banner_title.add_theme_color_override("font_color", color)
 	if sub != "":
@@ -3923,14 +4013,27 @@ func _banner(title: String, pts: int, secs: float, color: Color, sub := "") -> v
 		banner_sub.text = L.t("bonus_line", {"p": pts, "s": int(secs)})
 	var vs := get_viewport_rect().size
 	banner_title.add_theme_font_size_override("font_size", int(clampf(vs.x / 13.0, 34.0, 64.0)))
+	if mode.id == "classic":
+		# Leave room for the scale overshoot and outlines inside the playable area.
+		var width := maxf(100.0, minf(board.size.x, vs.x) / 1.08 - 36.0)
+		var title_size := banner_title.get_theme_font_size("font_size")
+		var measured := f_display.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size).x
+		banner_title.add_theme_font_size_override("font_size", maxi(16, floori(title_size * minf(1.0, width / maxf(measured, 1.0)))))
+		var sub_width := f_num.get_string_size(banner_sub.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 30).x
+		banner_sub.add_theme_font_size_override("font_size", maxi(14, floori(30.0 * minf(1.0, width / maxf(sub_width, 1.0)))))
+		banner_box.get_parent().queue_sort()
+	else:
+		banner_sub.add_theme_font_size_override("font_size", 30)
 	banner_box.pivot_offset = banner_box.size / 2
 	banner_box.scale = Vector2.ONE * 0.4
 	banner_box.modulate.a = 1.0
 	var tw := create_tween()
+	banner_box.set_meta("banner_tween", tw)
 	tw.tween_property(banner_box, "scale", Vector2.ONE * 1.08, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.tween_property(banner_box, "scale", Vector2.ONE, 0.12)
 	tw.tween_interval(0.9)
-	tw.parallel().tween_property(banner_box, "position:y", banner_box.position.y - 30, 1.3)
+	if mode.id != "classic":
+		tw.parallel().tween_property(banner_box, "position:y", banner_box.position.y - 30, 1.3)
 	tw.tween_property(banner_box, "modulate:a", 0.0, 0.35)
 
 
@@ -3983,6 +4086,8 @@ func _relayout_board() -> void:
 			keeper.transpose_bonus_slot()
 			board.transposed()
 	board.refresh()
+	if mode.id == "classic" and not _classic_android_sides():
+		_layout_classic_header()
 
 
 func _on_viewport_resized() -> void:
@@ -3992,8 +4097,7 @@ func _on_viewport_resized() -> void:
 	if turn:
 		pause_game()
 	compact = s.x < 640 or s.y < 600
-	title_label.visible = s.x >= 980 and not _classic_android_sides()
-	hud_classic.add_theme_constant_override("separation", 10 if compact else 18)
+	title_label.hide()
 	var sides := _classic_android_sides()
 	var m := 4 if sides else (6 if compact else 16)
 	var inset := _safe_insets()
@@ -4006,7 +4110,7 @@ func _on_viewport_resized() -> void:
 	margin.add_theme_constant_override("margin_right", m + int(rounded.size.x))
 	margin.add_theme_constant_override("margin_bottom", m + int(rounded.size.y))
 	hud.add_theme_constant_override("separation", 10 if compact else 22)
-	combo_box.custom_minimum_size.x = 64 if sides or compact else 96
+	combo_box.custom_minimum_size.x = 0 if mode.id == "classic" and not sides else (64 if sides or compact else 96)
 	var w := clampf(s.x - (24 if compact else 40), 260, 620)
 	for p in [pause_panel, over_panel, leaders_panel, settings_panel, rules_panel, level_panel, tasks_panel, collection_panel,
 			gift_panel, ach_panel, pass_panel, stats_panel, confirm_panel]:
