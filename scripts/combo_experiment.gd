@@ -67,7 +67,7 @@ static func select_special(value: String, fixed_seed: int) -> bool:
 
 
 static func window_seconds() -> float:
-	return 3.0 if variant == "A" else 3.5
+	return ScoreKeeper.COMBO_WINDOW if variant == "A" else ScoreKeeper.CLASSIC_COMBO_WINDOW
 
 
 static func append_report(report: Dictionary) -> void:

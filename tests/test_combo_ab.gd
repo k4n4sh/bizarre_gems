@@ -19,6 +19,8 @@ func run_suite(main) -> Dictionary:
 	checks = 0
 	failures.clear()
 	_check_keeper()
+	check(main.ComboExperiment.variant == "" and main.ComboExperiment.window_seconds() == 3.5, "ordinary Classic defaults to 3.5 without selecting A/B")
+	check(main.ComboExperiment.special_rules == "timed" and not main.ComboExperiment.fixed_layout and not main.ComboExperiment.is_read_only(), "ordinary Classic retains timed special rules, random layout and saving")
 	var save = main.get_node("/root/Save")
 	var progress = main.get_node("/root/Progress")
 	var saved: Dictionary = save.cloud_data().duplicate(true)
@@ -32,6 +34,8 @@ func run_suite(main) -> Dictionary:
 		main._ab_run["automated_test"] = true
 		var expected := 3.0 if variant == "A" else 3.5
 		check(main.keeper.combo_window == expected, variant + ": configured window")
+		check(not main.keeper.timed_special, variant + ": explicit A/B retains legacy special rules")
+		check(main.keeper.tier_time == 2.0 and main.keeper.streak_time == 3.0, variant + ": explicit A/B retains legacy time rewards")
 		check(main.logic.gems_left() == 270 and main.time_left == 120.0, variant + ": original board and timer")
 		layouts.append(main.logic.cells.duplicate())
 		check(not main.debug_start_combo_ab("B" if variant == "A" else "A", 7), variant + ": cannot switch during play")
@@ -57,6 +61,7 @@ func run_suite(main) -> Dictionary:
 		check(main.state == main.State.OVER, variant + ": normal completion")
 		var report: Dictionary = main.last_combo_report.duplicate(true)
 		reports.append(report)
+		check(report.combo_window == expected and report.special_rules == "legacy", variant + ": report contains actual experimental rules")
 		check(report.score == main.score and report.destroyed_gems == 270 - main.logic.gems_left(), variant + ": report totals")
 		check(report.max_streak == main.keeper.best_combo and report.combo_breaks == main.keeper.combo_breaks, variant + ": report series")
 		check(report.hits_at_x4 == main.keeper.hits_at_x4 and report.end_reason == main.end_reason, variant + ": report x4 and reason")

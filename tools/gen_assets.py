@@ -651,7 +651,7 @@ def make_sounds():
     make_combo_sounds(rng)
     make_voices()
     make_bright_sounds(rng)
-    make_music()
+    # Background music is supplied as OGG files; asset generation leaves it untouched.
 
 
 def arpeggio(notes, step, tail, decay=.3, vol=.28):
@@ -788,7 +788,6 @@ def make_bright_sounds(rng):
     a = arpeggio((1047, 1319, 1568, 2093, 2637, 3136), .09, 1.2, .5, .22); x[:min(n, len(a))] += a[:min(n, len(a))]
     g = shimmer(rng, 1.8, .14); x[:len(g)] += g
     write_sfx(A("audio", "b_clear.wav"), np.tanh(x * 1.3) * .8)
-    make_bright_music()
 
 
 def _kick():
@@ -817,52 +816,6 @@ def _lead(freq, dur, vol=.12):
     return x * env_ * vol
 
 
-def make_bright_music():
-    """Bright mode loop: a light funky groove in A minor at 112 bpm, 8 bars. Kick, snare with
-    ghost notes, swung hats, a syncopated bass and a pentatonic lead melody (original)."""
-    rng = np.random.default_rng(33)
-    bpm = 112; beat = 60 / bpm; bars = 8; step = beat / 4
-    n = int(SR * beat * 4 * bars); x = np.zeros(n)
-    def put(sig, at, vol=1.0):
-        s0 = int(at * SR)
-        if s0 >= n: return
-        x[s0:s0 + len(sig)] += sig[:n - s0] * vol
-    nA, nC, nD, nE, nG = 220.0, 261.63, 293.66, 329.63, 392.0
-    chords = [(nA, nC, nE), (nD, 349.23, nA * 2), (nC, nE, nG), (nG, 246.94, nD)]  # Am Dm C G
-    bass_roots = [55.0, 73.42, 65.41, 49.0]
-    # sixteenth-note bass rhythm (1 = play), same each bar, syncopated
-    bass_hits = [1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0]
-    # lead: (bar, step, semitone offset from A4, length in steps)
-    def note(semi): return 440.0 * 2 ** (semi / 12)
-    lead = [(0, 0, 0, 3), (0, 4, 3, 2), (0, 6, 5, 2), (0, 8, 7, 4), (0, 14, 5, 2),
-            (1, 0, 3, 3), (1, 4, 0, 2), (1, 8, -2, 4), (1, 12, 0, 4),
-            (2, 0, 7, 2), (2, 2, 10, 2), (2, 4, 12, 4), (2, 10, 10, 2), (2, 12, 7, 4),
-            (3, 0, 5, 3), (3, 4, 3, 3), (3, 8, 2, 6),
-            (4, 0, 0, 3), (4, 4, 3, 2), (4, 6, 5, 2), (4, 8, 7, 4), (4, 14, 10, 2),
-            (5, 0, 12, 3), (5, 4, 10, 2), (5, 8, 7, 4), (5, 12, 5, 4),
-            (6, 0, 3, 2), (6, 2, 5, 2), (6, 4, 7, 4), (6, 10, 5, 2), (6, 12, 3, 4),
-            (7, 0, 0, 6), (7, 8, -5, 2), (7, 12, -2, 4)]
-    for bar in range(bars):
-        ci = bar % 4; t0 = bar * 4 * beat
-        for b in range(4):
-            put(_kick(), t0 + b * beat, .85 if b in (0, 2) else .55)
-            if b in (1, 3):
-                put(_snare(rng), t0 + b * beat, .45)
-        for st in range(16):
-            swing = step * .12 if st % 2 else 0.0
-            put(_hat(rng), t0 + st * step + swing, .35 if st % 4 == 2 else .18)
-            if st in (7, 15):
-                put(_snare(rng), t0 + st * step, .12)  # ghost notes
-            if bass_hits[st]:
-                f = bass_roots[ci] * (2 if st in (6, 13) else 1)
-                put(pluck(f * 2, step * 1.8, .34, .6), t0 + st * step)
-        for f in chords[ci]:  # short chord stabs on the offbeats
-            for st in (2, 10):
-                put(pluck(f, step * 1.5, .06, .8), t0 + st * step)
-    for bar, st, semi, length in lead:
-        put(_lead(note(semi), step * length), bar * 4 * beat + st * step)
-    x = np.tanh(x * 1.15) * .75
-    write_wav(A("audio", "music_bright.wav"), x)
 
 
 VOICE_LINES = {"great": "Great!", "super": "Super!", "amazing": "Amazing!", "incredible": "Incredible!",
@@ -928,31 +881,6 @@ def brutal(x):
     return y / (np.max(np.abs(y)) + 1e-9) * .95
 
 
-def make_music():
-    """A calm 32-second loop: soft pads over a slow plucked arpeggio, A minor."""
-    bpm, beats = 75, 40
-    beat = 60 / bpm
-    n = int(SR * beat * beats); t = np.arange(n) / SR
-    x = np.zeros(n)
-    chords = [(220, 261.63, 329.63), (174.61, 220, 261.63), (130.81, 196, 261.63), (196, 246.94, 293.66)] * 3
-    bar = beat * 4
-    for ci in range(int(beats / 4)):
-        ch = chords[ci % len(chords)]
-        s, e = int(ci * bar * SR), int(min((ci + 1) * bar, beat * beats) * SR)
-        seg = np.arange(e - s) / SR
-        fade = np.minimum(1, np.minimum(seg / .8, (seg[-1] - seg + 1e-6) / .8))
-        for f in ch:
-            x[s:e] += (np.sin(2 * np.pi * f * seg) + .3 * np.sin(2 * np.pi * f * 2.003 * seg)) * fade * .045
-        for k in range(8):
-            f = ch[k % 3] * (2 if k >= 3 else 1) * (2 if k == 7 else 1)
-            o = s + int(k * beat / 2 * SR)
-            b = bell(f * 2, beat * 1.6, .35, .07)
-            x[o:o + len(b)] += b[:max(0, n - o)]
-    x = np.tanh(x * 1.4) * .7
-    # seamless loop: crossfade tail into head
-    cf = int(SR * .5)
-    x[:cf] = x[:cf] * np.linspace(0, 1, cf) + x[-cf:] * np.linspace(1, 0, cf)
-    write_wav(A("audio", "music.wav"), x[:-cf])
 
 
 def font(path, size):

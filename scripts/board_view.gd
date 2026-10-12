@@ -293,6 +293,12 @@ func reset_zoom() -> void:
 
 
 func refresh() -> void:
+	# A new board can be smaller than the previous one; cached input uses grid coordinates.
+	if logic:
+		if not logic.in_bounds(_hover):
+			_hover = Vector2i(-1, -1)
+		if not logic.in_bounds(_cursor):
+			_cursor = Vector2i(-1, -1)
 	_relayout()
 
 
@@ -589,7 +595,7 @@ func _draw() -> void:
 		draw_style_box(_frame, Rect2(origin - Vector2.ONE * frame_pad, grid_size + Vector2.ONE * frame_pad * 2))
 
 	var focus := _cursor if _keyboard else _hover
-	if interactive and focus.x >= 0 and logic.is_empty(focus):
+	if interactive and logic.in_bounds(focus) and logic.is_empty(focus):
 		var lane := Color(0.82, 0.67, 0.33, 0.08)
 		draw_rect(Rect2(origin.x, origin.y + focus.y * cell, grid_size.x, cell), lane)
 		draw_rect(Rect2(origin.x + focus.x * cell, origin.y, cell, grid_size.y), lane)
@@ -649,7 +655,7 @@ func _draw() -> void:
 						draw_string(number_font, bp + Vector2(0, bs * 0.74), str(logic.bomb[i]), HORIZONTAL_ALIGNMENT_CENTER, bs * 0.94,
 							fs, Color("#ff6b5a") if low else Color.WHITE)
 
-	if interactive and focus.x >= 0:
+	if interactive and logic.in_bounds(focus):
 		var col := Color(0.82, 0.67, 0.33, 1.0 if _keyboard else 0.6)
 		draw_rect(Rect2(origin + Vector2(focus) * cell + Vector2.ONE * 2, Vector2.ONE * (cell - 4)), col, false, 2.0)
 
@@ -803,14 +809,14 @@ func _gui_input(event: InputEvent) -> void:
 			KEY_A: Vector2i(-1, 0), KEY_D: Vector2i(1, 0), KEY_W: Vector2i(0, -1), KEY_S: Vector2i(0, 1)}
 		if dirs.has(event.keycode):
 			_keyboard = true
-			if _cursor.x < 0:
+			if not logic.in_bounds(_cursor):
 				_cursor = Vector2i(logic.cols / 2, logic.rows / 2)
 			else:
 				var d: Vector2i = dirs[event.keycode]
 				_cursor = Vector2i(posmod(_cursor.x + d.x, logic.cols), posmod(_cursor.y + d.y, logic.rows))
 			queue_redraw()
 			accept_event()
-		elif event.keycode in [KEY_SPACE, KEY_ENTER, KEY_KP_ENTER] and _cursor.x >= 0:
+		elif event.keycode in [KEY_SPACE, KEY_ENTER, KEY_KP_ENTER] and logic.in_bounds(_cursor):
 			slot_pressed.emit(_cursor)
 			accept_event()
 

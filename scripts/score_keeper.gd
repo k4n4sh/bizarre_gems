@@ -24,12 +24,16 @@ const SHINE_TIME := 2.0
 const TIER_TIME := 2.0       ## seconds for reaching a new combo multiplier
 const STREAK_EVERY := 10     ## every this many hits in a row...
 const STREAK_TIME := 3.0     ## ...give this many seconds
+const CLASSIC_TIER_TIME := 1.0
+const CLASSIC_STREAK_TIME := 1.0
 ## combo length -> multiplier (first entry whose length is reached, checked from the top)
 const TIERS := [[9, 4], [5, 3], [2, 2], [0, 1]]
 
 ## Extra seconds for combos, streaks, precise/perfect combos and shining gems. Bright mode
 ## turns them off (its timer also speeds up per level), so a round can't go on forever.
 var time_bonuses := true
+var tier_time := TIER_TIME
+var streak_time := STREAK_TIME
 var combo_window := COMBO_WINDOW
 var combo_breaks := 0  ## Loss of an established series (2+), by miss or timeout.
 var hits_at_x4 := 0    ## Includes the strike that first reaches x4.
@@ -52,6 +56,12 @@ static func multiplier_for(c: int) -> int:
 		if c >= t[0]:
 			return t[1]
 	return 1
+
+
+## Ordinary Classic opts in; other modes and explicit experiments keep legacy rewards.
+func configure_time_rewards(classic: bool) -> void:
+	tier_time = CLASSIC_TIER_TIME if classic else TIER_TIME
+	streak_time = CLASSIC_STREAK_TIME if classic else STREAK_TIME
 
 
 func reset() -> void:
@@ -151,9 +161,9 @@ func hit(n: int, now: float, shining := 0) -> Dictionary:
 	points += shining * SHINE_POINTS
 	time += shining * SHINE_TIME
 	if mult > old_mult and mult > 1:
-		time += TIER_TIME
+		time += tier_time
 	if combo % STREAK_EVERY == 0:
-		time += STREAK_TIME
+		time += streak_time
 	if not time_bonuses:
 		time = float(BoardLogic.bonus_for(n))  # only the basic +1 s / +2 s for 3 / 4 gems
 	score += points

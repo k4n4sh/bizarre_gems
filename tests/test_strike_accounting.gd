@@ -37,7 +37,7 @@ func run_suite(main) -> Dictionary:
 	_case(main, progress, "both partners in cross", "direct", 0, 0, 2, 2, 0.0)
 	_case(main, progress, "partner outside cross", "outside", 0, 0, 3, 6, 1.0)
 	_case(main, progress, "box cracks but stays", "box", 0, 0, 1, 2, 0.0)
-	_case(main, progress, "outside partner at x2", "outside", 1, 0, 3, 10, 3.0)
+	_case(main, progress, "outside partner at x2", "outside", 1, 0, 3, 10, 2.0)
 	_case(main, progress, "direct pair with shining bonus", "direct", 0, 1, 2, 7, 2.0)
 	for key in progress_before:
 		progress.set(key, progress_before[key])
@@ -73,6 +73,9 @@ func _case(main, progress, label: String, kind: String, prior_hits: int, shining
 	main.board.clear_fx()
 	main.board.refresh()
 	main.keeper = ScoreKeeper.new()
+	main.keeper.configure_time_rewards(true)
+	main.keeper.combo_window = ScoreKeeper.CLASSIC_COMBO_WINDOW
+	main.keeper.timed_special = true
 	for i in prior_hits:
 		main.keeper.hit(2, float(i))
 	main.score = main.keeper.score

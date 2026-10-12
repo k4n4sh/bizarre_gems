@@ -1,0 +1,19 @@
+[remap]
+
+importer="oggvorbisstr"
+type="AudioStreamOggVorbis"
+uid="uid://cy7gh7nnbpg6c"
+path="res://.godot/imported/bright run theme loop.ogg-7854ce24685850d8d62c36dbcc90a06a.oggvorbisstr"
+
+[deps]
+
+source_file="res://assets/audio/bright run theme loop.ogg"
+dest_files=["res://.godot/imported/bright run theme loop.ogg-7854ce24685850d8d62c36dbcc90a06a.oggvorbisstr"]
+
+[params]
+
+loop=true
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

@@ -1,0 +1,19 @@
+[remap]
+
+importer="oggvorbisstr"
+type="AudioStreamOggVorbis"
+uid="uid://d33tbgum1rdv7"
+path="res://.godot/imported/classic theme loop.ogg-bb337ce8042507ff18086e6e86524f51.oggvorbisstr"
+
+[deps]
+
+source_file="res://assets/audio/classic theme loop.ogg"
+dest_files=["res://.godot/imported/classic theme loop.ogg-bb337ce8042507ff18086e6e86524f51.oggvorbisstr"]
+
+[params]
+
+loop=true
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

@@ -16,8 +16,8 @@ const SOUNDS := {
 	"precise": preload("res://assets/audio/precise.wav"),
 	"perfect": preload("res://assets/audio/perfect.wav"),
 }
-const MUSIC := preload("res://assets/audio/music.wav")
-const MUSIC_BRIGHT := preload("res://assets/audio/music_bright.wav")
+const MUSIC := preload("res://assets/audio/classic theme loop.ogg")
+const MUSIC_BRIGHT := preload("res://assets/audio/bright run theme loop.ogg")
 ## Bright mode swaps in its own poppy effects where one exists (b_<name>).
 const BRIGHT := {
 	"knock2": preload("res://assets/audio/b_knock2.wav"), "knock3": preload("res://assets/audio/b_knock3.wav"),
@@ -61,7 +61,6 @@ func _ready() -> void:
 	_music = AudioStreamPlayer.new()
 	_music.stream = MUSIC
 	apply_volumes()
-	_music.finished.connect(_music.play)
 	add_child(_music)
 
 

@@ -62,8 +62,11 @@ func _run() -> void:
 			var old_bright: int = save.best_bright
 			await main.start_game(id,daily)
 			check(not main._ab_active and not main.ComboExperiment.is_read_only(), "ordinary game permits saving " + str(config))
-			check(main.keeper.combo_window == (3.5 if id == "classic" else 3.0), "combo timing retained")
+			check(main.keeper.combo_window == (3.5 if id == "classic" else 3.0), "standard ordinary combo window " + str(config))
+			check(main.keeper.tier_time == (1.0 if id == "classic" else 2.0) and main.keeper.streak_time == (1.0 if id == "classic" else 3.0), "mode time rewards " + str(config))
 			check(main.keeper.timed_special == (id == "classic"), "special rules retained")
+			if id == "classic":
+				check(main.keeper.SPECIAL_WINDOW == 5.0 and not main.ComboExperiment.fixed_layout, "standard Classic retains five-second special window and random layout")
 			var score: int = await earn(main)
 			check(score > 0, "result earned through real strikes " + str(config))
 			main.end_game("time")

@@ -11,6 +11,7 @@ func check(ok: bool, label: String) -> void:
 
 func keeper() -> ScoreKeeper:
 	var k := ScoreKeeper.new()
+	k.configure_time_rewards(true)
 	k.combo_window = ScoreKeeper.CLASSIC_COMBO_WINDOW
 	k.timed_special = true
 	return k
@@ -25,6 +26,13 @@ func run_rules() -> Dictionary:
 	checks = 0
 	failures.clear()
 	var k := keeper()
+	check(k.combo_window == 3.5 and ScoreKeeper.SPECIAL_WINDOW == 5.0, "Classic defaults are 3.5 ordinary / 5.0 special seconds")
+	k.hit(3, 0.0)
+	check(k.special_window_left(0.0) == 5.0, "first unique action starts a five-second window")
+	var pair := k.hit(2, 1.0)
+	check(k.window_left(1.0) == 3.5 and k.special_window_left(1.0) == 4.5, "pair refreshes ordinary clock and extends separate special clock")
+	check(k.precise_streak == 1 and pair.event == "", "ordinary hit preserves unique count without a special reward")
+	k.reset()
 	check(sequence(k, [3, 3, 3]) == ["", "", "precise"], "3/3/3 Precise")
 	check(k.precise_streak == 3 and k.special_window_left(2.0) == 5.0, "3+ resets deadline to five seconds")
 	k.reset()
@@ -69,7 +77,15 @@ func run_rules() -> Dictionary:
 	k.hit(3, 3.5001)
 	check(k.combo == 1 and k.precise_streak == 1, "late hit resets before starting new cycle")
 	k.miss()
-	check(k.combo == 0 and k.precise_streak == 0 and k.special_window_left(3.5) == 0, "miss clears both")
+	check(k.combo == 0 and k.precise_streak == 0 and k.special_window_left(3.0) == 0, "miss clears both")
+	k.reset()
+	k.hit(3, 0.0)
+	k.hit(2, 3.25)
+	check(k.combo == 2 and k.precise_streak == 1 and k.special_window_left(3.25) == 2.25, "pair within restored 3.5 window preserves special series")
+	k.reset()
+	k.hit(3, 0.0)
+	k.hit(2, 3.5001)
+	check(k.combo == 1 and k.precise_streak == 0 and k.special_window_left(3.5001) == 0, "pair after ordinary 3.5 window cannot preserve or revive special series")
 	k.reset()
 	check(sequence(k, [3,3,3,3,2,3,3,3,3]) == ["","","precise","perfect","","","","precise","perfect"], "two independent cycles")
 	check(k.precise_events == 2 and k.perfect_events == 2 and k.precise_count == 4, "separate event counters")
@@ -122,7 +138,7 @@ func run_in_game(main) -> Dictionary:
 		hashes[path] = FileAccess.get_sha256(path) if FileAccess.file_exists(path) else ""
 	main.ComboExperiment.select_special("timed", 42)
 	await main.start_game("classic")
-	check(main.keeper.combo_window == 3.5 and main.keeper.timed_special and main._ab_active, "explicit Classic test uses current 3.5 rules and isolates saves")
+	check(main.keeper.combo_window == 3.5 and main.keeper.timed_special and main._ab_active, "explicit special experiment retains 3.5 window and isolates saves")
 	check(main.ComboExperiment.fixed_layout, "explicit experiment uses its fixed seed")
 	main.go_menu()
 	var observations := []

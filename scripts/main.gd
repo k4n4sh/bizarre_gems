@@ -354,6 +354,7 @@ func start_game(mode_id := "", is_daily := false) -> void:
 	if classic:
 		ComboExperiment.begin_classic()
 	_ab_active = classic and ComboExperiment.is_read_only()
+	keeper.configure_time_rewards(classic and not _ab_active)
 	keeper.timed_special = classic and ComboExperiment.special_rules == "timed"
 	keeper.combo_window = ComboExperiment.window_seconds() if classic else ScoreKeeper.COMBO_WINDOW
 	if not ComboExperiment.is_read_only() and Save.mode != mode.id and mode.id in ["classic", "bright", "zen", "levels", "puzzle"]:
