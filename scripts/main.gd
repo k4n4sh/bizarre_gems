@@ -7,6 +7,22 @@ enum State { MENU, PLAYING, PAUSED, OVER }
 ## Temporarily exposed modes; dormant cards and their progress stay intact.
 ## Daily Challenge has its own menu entry and starts Bright Run with a daily seed.
 const MENU_MODES := ["classic", "bright"]
+## Temporary generation policy shared by Bright Run and its Daily Challenge.
+## The mechanics remain available to levels/Zen and can be restored here later.
+const RUN_HAZARDS_ENABLED := false
+const ComboExperiment = preload("res://scripts/combo_experiment.gd")
+const MenuPreview = preload("res://scripts/menu_preview.gd")
+## Menu-only styling. Gameplay and service-panel themes are intentionally separate.
+const MENU_BRASS := Color("#c6a35c")
+const MENU_TEXT := Color("#f4edda")
+const MENU_MUTED := Color("#a6b7b7")
+const MENU_PANEL := Color("#10272b")
+
+var _ab_active := false
+var _ab_reported := true
+var _ab_run := {}
+var _ab_result_index := 0
+var last_combo_report := {}
 
 const START_TIME := 120.0
 const CONTINUE_TIME := 15.0
@@ -22,8 +38,13 @@ const MUTED := Color("#aab8ec")
 const DANGER := Color("#ff5d6c")
 const INK := Color("#141a3a")
 const PANEL := Color(0.08, 0.11, 0.3, 0.97)
-## Palettes the screen cycles through on big combos and new boards: background top/bottom
-## and how far the board's hue is rotated (gems change colour with it).
+## Background surface/light palettes. Gem colours and the cosmetic pack stay independent.
+const RUN_PALETTE_SECONDS := 0.0  # Each triggering event changes the atmosphere immediately.
+const RUN_SURFACE_LUMA := 0.05*0.2126 + 0.13*0.7152 + 0.14*0.0722
+## Original green plus five dyes, with the same dark fabric luminance.
+const RUN_FABRICS := [Color(0.05,0.13,0.14), Color("#563367"), Color("#612c3b"),
+	Color("#273f79"), Color("#096080"), Color("#765329")]
+const RUN_LIGHTS := [Color(0.18,0.71,0.66), Color(0.48,0.31,0.84), Color(0.82,0.67,0.33)]
 const THEMES := [
 	{"top": Color("#3d63e0"), "bottom": Color("#1b2c8c")},  # original glossy tiles
 	{"top": Color("#4a6fd8"), "bottom": Color("#22337f")},  # candy
@@ -91,6 +112,11 @@ var wave := 1
 var theme_i := 0
 var hue_total := 0.0
 var dealing := false
+## Geometry belongs to a run; Daily still generates in its canonical, seeded orientation.
+var _run_dims := Vector2i.ZERO
+var _daily_transposed := false
+var _run_starting := false
+var _run_generation := 0
 var level_label: Label
 var level_n := 1          ## level being played in the level map mode
 var pending_level := 1
@@ -163,7 +189,15 @@ var btn_pause: Button
 var btn_settings: Button
 var btn_restart: Button
 var hud_balance: Control  ## empty slot on the right so the score stays centred
+## Rendering only. Never use this value to choose generation, clocks, audio or input rules.
+var visual_profile := "classic"
 var hud_classic: HBoxContainer
+var board_column: VBoxContainer
+var classic_sides: HBoxContainer
+var classic_stats: VBoxContainer
+var classic_actions: VBoxContainer
+var _classic_safe_area := Rect2()
+var _classic_safe_poll := 0.0
 var time_row: HBoxContainer
 ## Each mode has its own HUD; the shared widget variables point at the active one.
 var hud_sets := {}
@@ -208,6 +242,7 @@ var ui := {}  # widgets that carry translated text
 
 
 func _ready() -> void:
+	ComboExperiment.initialize()
 	rng.randomize()
 	_load_fonts()
 	theme = _make_theme()
@@ -305,18 +340,68 @@ func _menu_mode() -> String:
 
 
 func start_game(mode_id := "", is_daily := false) -> void:
+	_report_combo_ab("restart")
+	_run_generation += 1
+	var generation := _run_generation
+	_run_dims = Vector2i.ZERO
+	_daily_transposed = false
+	_run_starting = false
+	dealing = false
+	board.modulate.a = 1.0
 	daily = is_daily
 	_use_mode(mode_id if mode_id != "" else _menu_mode())
-	if Save.mode != mode.id and mode.id in ["classic", "bright", "zen", "levels", "puzzle"]:
+	var classic: bool = mode.id == "classic" and not daily
+	if classic:
+		ComboExperiment.begin_classic()
+	_ab_active = classic and ComboExperiment.is_read_only()
+	keeper.timed_special = classic and ComboExperiment.special_rules == "timed"
+	keeper.combo_window = ComboExperiment.window_seconds() if classic else ScoreKeeper.COMBO_WINDOW
+	if not ComboExperiment.is_read_only() and Save.mode != mode.id and mode.id in ["classic", "bright", "zen", "levels", "puzzle"]:
 		Save.mode = mode.id  # the tutorial and the daily challenge don't become "last mode"
 		Save.store()
 	wave = 1
 	if mode.kind == "levels":
 		level_n = pending_level
 	_set_orientation(mode.id == "classic")
+	if mode.id == "bright":
+		# Showing the container schedules its layout. Do not deal or start the clock yet.
+		_run_starting = true
+		if state == State.PLAYING:
+			Yandex.gameplay(false)
+		state = State.PAUSED
+		board.interactive = false
+		board.modulate.a = 0.0  # Retain layout participation without showing the previous board.
+		score = 0
+		shown_score = 0.0
+		time_left = START_TIME
+		keeper.reset()
+		_update_combo_widget()
+		_update_hud()
+		_show_panel(null)
+		await _wait_run_layout(generation)
+		if generation != _run_generation:
+			return
+		var area := board.size - Vector2.ONE * board.frame_pad * 2.0
+		if daily:
+			var canonical := BoardLogic.best_dims(Vector2(360, 640), 200)
+			_daily_transposed = minf(area.x / canonical.y, area.y / canonical.x) > minf(area.x / canonical.x, area.y / canonical.y)
+			_run_dims = Vector2i(canonical.y, canonical.x) if _daily_transposed else canonical
+		else:
+			_run_dims = BoardLogic.best_dims(area, 200)
+		_run_starting = false
+		board.modulate.a = 1.0
 	_deal_board()
 	level_total = logic.gems_left()
-	_set_theme(Progress.look, true)
+	if _ab_active:
+		_ab_run = {"run_id": "%s-%s" % [Time.get_datetime_string_from_system(true), Time.get_ticks_usec()],
+			"variant": ComboExperiment.variant if ComboExperiment.variant != "" else "B", "combo_window": keeper.combo_window,
+			"special_rules": "timed" if keeper.timed_special else "legacy",
+			"seed": ComboExperiment.board_seed if ComboExperiment.fixed_layout else null, "cols": logic.cols, "rows": logic.rows,
+			"initial_gems": level_total, "layout_sha256": str(logic.cells).sha256_text()}
+		_ab_result_index = 0
+		_ab_reported = false
+		print("[combo-ab] START ", JSON.stringify(_ab_run), " | saves/leaderboards disabled for this process")
+	_set_theme(0 if mode.id == "bright" and not daily else Progress.active_look(), true)
 	score = 0
 	shown_score = 0.0
 	keeper.reset()
@@ -355,8 +440,29 @@ func start_game(mode_id := "", is_daily := false) -> void:
 		_tutorial_step(0)
 
 
-## Switch rules and look: "classic" is the original game, "bright" the toy-style mode.
+## Wait for actual, stable container dimensions, including Android's portrait rotation.
+## A cancelled start never resumes or replaces a newer game's board.
+func _wait_run_layout(generation: int) -> void:
+	var previous := Vector4.ZERO
+	var stable := 0
+	while generation == _run_generation:
+		await get_tree().process_frame
+		var viewport_size := get_viewport_rect().size
+		var area := board.size - Vector2.ONE * board.frame_pad * 2.0
+		var current := Vector4(viewport_size.x, viewport_size.y, area.x, area.y)
+		var portrait_ready := not OS.has_feature("android") or viewport_size.y >= viewport_size.x
+		if board.is_visible_in_tree() and area.x >= 50.0 and area.y >= 50.0 and portrait_ready:
+			stable = stable + 1 if current.is_equal_approx(previous) else 0
+			if stable >= 2:
+				return
+		else:
+			stable = 0
+		previous = current
+
+
+## Mode rules retain their skin discriminator; presentation is resolved separately.
 func _use_mode(id: String) -> void:
+	board.reset_run_surface()
 	match id:
 		"bright":
 			mode = BoardLogic.BRIGHT
@@ -370,14 +476,20 @@ func _use_mode(id: String) -> void:
 			mode = BoardLogic.TUTORIAL
 		_:
 			mode = BoardLogic.CLASSIC
+	visual_profile = "classic_run" if mode.id in ["bright", "tutorial"] and not Progress.COSMETICS_ENABLED else mode.skin
+	tut_label.visible = false
+	tut_hand.visible = false
 	board.skin = mode.skin
+	board.visual_profile = visual_profile
 	board.zoom_enabled = mode.skin == "classic" and _is_touch_device()
 	board.reset_zoom()
-	ambient.set_skin(mode.skin)
+	ambient.set_skin("classic" if visual_profile == "classic_run" else visual_profile)
+	ambient.reset_velvet_palette()  # A restart cancels the old dye before waiting for layout.
 	Sfx.set_skin(mode.skin)
 	Sfx.update_music()
 	if hud_sets.has(mode.skin):
 		_apply_hud(mode.skin)
+		_style_run_hud(mode.id in ["bright", "tutorial"])
 		_update_combo_widget()
 	_update_hud()
 	if is_inside_tree() and margin:
@@ -405,6 +517,9 @@ func _deal_board() -> void:
 			lv = {"slots": 200, "kinds": 6, "per_kind": 28, "min_moves": 4, "max_moves": 999, "tries": 30,
 				"jokers": 0.1, "boxes": 5, "chains": 3, "boss": false, "goal_kind": -1, "ice": 3, "bombs": 2,
 				"bomb_moves": 12, "chameleons": 2}
+			if not RUN_HAZARDS_ENABLED:
+				lv.ice = 0
+				lv.bombs = 0
 		elif mode.kind == "zen":
 			lv.ice = mini(wave, 4) if wave >= 2 else 0
 			lv.chameleons = mini(wave - 2, 3) if wave >= 3 else 0
@@ -421,7 +536,9 @@ func _deal_board() -> void:
 			else:
 				r.seed = hash("bizarre-gems-%s-%s-%d" % [_today(), mode.id, wave])
 			area = Vector2(360, 640)
-		var d := BoardLogic.best_dims(area, lv.slots)
+		var d := _run_dims
+		if mode.id != "bright" or daily or d == Vector2i.ZERO:
+			d = BoardLogic.best_dims(area, lv.slots)
 		logic.setup_tuned(d.x, d.y, r, mode.shining, lv.kinds, lv.per_kind, lv.min_moves, lv.max_moves, lv.tries, true,
 			lv.jokers, lv.boxes)
 		if int(lv.get("chains", 0)) > 0:
@@ -432,6 +549,8 @@ func _deal_board() -> void:
 			logic.add_bombs(r, int(lv.bombs), int(lv.get("bomb_moves", 10)))
 		if int(lv.get("chameleons", 0)) > 0:
 			logic.add_chameleons(r, int(lv.chameleons))
+		if mode.id == "bright" and daily and _daily_transposed:
+			logic.transpose()  # After seeded generation, exactly as for the first board.
 		board_kinds = int(lv.kinds)
 		goal_kind = int(lv.get("goal_kind", -1)) if mode.kind == "levels" else -1
 		return
@@ -443,11 +562,16 @@ func _deal_board() -> void:
 			logic.transpose()  # the same daily board, upright in mobile browsers
 	else:
 		var d := _dims()
-		logic.setup(d.x, d.y, rng, mode.shining, mode.kinds, mode.per_kind)
+		if _ab_active and ComboExperiment.fixed_layout:
+			var fixed_rng := RandomNumberGenerator.new()
+			fixed_rng.seed = ComboExperiment.board_seed
+			logic.setup(d.x, d.y, fixed_rng, mode.shining, mode.kinds, mode.per_kind)
+		else:
+			logic.setup(d.x, d.y, rng, mode.shining, mode.kinds, mode.per_kind)
 
 
 ## A board ran out of moves: deal the next one with a time bonus, the game goes on.
-func _next_wave(at: Vector2i) -> void:
+func _next_wave(at: Vector2i, palette_already_changed := false) -> void:
 	var full_clear := logic.gems_left() == 0
 	var bonus_t := WAVE_TIME + (CLEAR_TIME if full_clear else 0.0)
 	if mode.kind == "run":
@@ -487,10 +611,14 @@ func _next_wave(at: Vector2i) -> void:
 	Sfx.play("precise")
 	board.play_burst(at, 50)
 	board.play_confetti(70)
-	_set_theme(_next_look())
+	if not palette_already_changed:
+		_set_theme(_next_look())
 	var tw := create_tween()
 	tw.tween_interval(1.2 if full_clear else 0.7)
+	var generation := _run_generation
 	tw.tween_callback(func():
+		if generation != _run_generation:
+			return
 		_deal_board()
 		board.clear_fx()
 		board.refresh()
@@ -502,6 +630,10 @@ func _next_wave(at: Vector2i) -> void:
 ## The look after the current one: the six base looks in turn; a special look (seasonal or
 ## gold) is only ever the starting one.
 func _next_look() -> int:
+	if mode.id == "bright" and not daily:
+		return (theme_i + 1) % 6 if theme_i < 6 else 0
+	if not Progress.COSMETICS_ENABLED:
+		return Progress.BASE_LOOK
 	return (theme_i + 1) % 6 if theme_i < 6 else 0
 
 
@@ -509,13 +641,35 @@ func _next_look() -> int:
 func _set_theme(i: int, instant := false) -> void:
 	if mode.skin != "bright":
 		return  # the classic look keeps its colours
-	theme_i = posmod(i, THEMES.size())
+	var run_palette: bool = mode.id == "bright" and not daily
+	theme_i = posmod(i, THEMES.size()) if run_palette or Progress.COSMETICS_ENABLED else Progress.BASE_LOOK
 	var t: Dictionary = THEMES[theme_i]
 	if mode.kind == "levels":
 		t = CHAPTER_THEMES[BoardLogic.chapter_of(level_n) % CHAPTER_THEMES.size()]  # each chapter keeps its own sky
-	ambient.fade_palette(t.top, t.bottom, 0.01 if instant else 0.9)
-	board.palette = Progress.look  # tiles always show the pack chosen in the collection; only the backdrop cycles
-	if not instant:
+	board.palette = Progress.active_look()  # Presentation policy never changes mode.skin or the saved choice.
+	if run_palette:
+		var index := theme_i % RUN_FABRICS.size()
+		var fabric: Color = RUN_FABRICS[index]
+		var luminance := fabric.r*0.2126 + fabric.g*0.7152 + fabric.b*0.0722
+		var surface := Color(fabric.r,fabric.g,fabric.b,0.55)
+		if index != 0:
+			surface = Color(fabric.r*RUN_SURFACE_LUMA/luminance,fabric.g*RUN_SURFACE_LUMA/luminance,fabric.b*RUN_SURFACE_LUMA/luminance,0.55)
+		var from_surface: Color = board._frame.bg_color
+		var lights := {"pool_a":RUN_LIGHTS[0],"pool_b":RUN_LIGHTS[1],"pool_c":RUN_LIGHTS[2],
+			"tint_top":Color(0,0,0,0),"tint_bottom":Color(0,0,0,0)}
+		if index != 0:
+			lights.pool_a = fabric.lightened(0.15)
+			lights.pool_b = fabric.lightened(0.08)
+			lights.pool_c = fabric.lightened(0.22)
+		ambient.fade_palette(t.top,t.bottom,0.0 if instant else RUN_PALETTE_SECONDS,true,
+			{"fabric":fabric,"strength":0.0 if index == 0 else 1.0,"lights":lights},
+			func(blend: float): board.set_run_surface(from_surface.lerp(surface,blend)))
+		if not instant:
+			ambient.palette_burst(fabric.lightened(0.65))
+			board.shake(0.10)
+	else:
+		ambient.fade_palette(t.top,t.bottom,0.01 if instant else 0.9)
+	if not instant and not run_palette:
 		board.flash(Color.WHITE, 0.35)
 		board.glow(1.0)
 
@@ -652,6 +806,7 @@ func _tutorial_step(i: int) -> void:
 	tut_step = i
 	var keys := ["tut1", "tut2", "tut3", "tut4"]
 	tut_label.text = L.t(keys[mini(i, 3)])
+	tut_label.set_meta("instruction", tut_label.text)
 	tut_label.visible = true
 	var target := _tutorial_target()
 	tut_hand.visible = target.x >= 0
@@ -670,7 +825,10 @@ func _update_hand() -> void:
 		return
 	var target: Vector2i = tut_hand.get_meta("target")
 	var pos := board.global_position + board.slot_center(target) - global_position
-	tut_hand.position = pos + Vector2(-8, 12 + 6 * sin(Time.get_ticks_msec() / 1000.0 * 7.0))
+	var side := minf(board.cell * 0.42, 56.0)
+	tut_hand.size = Vector2.ONE * side
+	# The reused icon's fingertip is at its top centre; leave the target visible.
+	tut_hand.position = pos + Vector2(-side * 0.5, 1 + 2 * sin(Time.get_ticks_msec() / 1000.0 * 7.0))
 
 
 func _tutorial_after_strike() -> void:
@@ -694,6 +852,8 @@ func _today() -> String:
 
 
 func _resume_play() -> void:
+	if _ab_active and state == State.OVER:
+		_ab_reported = false  # A continue/shuffle produces another cumulative result.
 	if mode.skin == "bright":
 		_set_orientation(false)  # bright modes are played upright on phones
 	state = State.PLAYING
@@ -743,6 +903,13 @@ func pause_game() -> void:
 
 
 func go_menu() -> void:
+	_report_combo_ab("abandoned")
+	_run_generation += 1
+	_run_starting = false
+	_run_dims = Vector2i.ZERO
+	_daily_transposed = false
+	dealing = false
+	board.modulate.a = 1.0
 	if state == State.PLAYING:
 		Yandex.gameplay(false)
 	state = State.MENU
@@ -761,7 +928,9 @@ func end_game(reason: String) -> void:
 	board.interactive = false
 	Yandex.gameplay(false)
 	var is_best := false
-	if daily:
+	if _ab_active:
+		_report_combo_ab(reason)
+	elif daily:
 		is_best = Save.submit_daily(score, _today())
 	else:
 		is_best = Save.submit(score, mode.id)
@@ -770,16 +939,19 @@ func end_game(reason: String) -> void:
 			Yandex.submit_score(Save.best_for(mode.id), mode.board)
 	Sfx.play("over")
 	Haptics.buzz("over")
-	var earned := Progress.crystals_for_score(score) - paid_crystals
-	paid_crystals += earned
-	var daily_paid := Progress.pay_daily() if daily else 0
-	Progress.add_crystals(maxi(earned, 0))
-	last_earned = maxi(earned, 0) + daily_paid
-	var tiers := _pay_xp(10 + mini(score / 50, 40) + (30 if daily_paid > 0 else 0))
-	Progress.report("games_" + mode.id)
-	Progress.report("max_combo", keeper.best_combo)
-	Progress.report("play_secs", int(play_time))
-	Progress.flush()
+	var tiers := 0
+	last_earned = 0
+	if not _ab_active:
+		var earned := Progress.crystals_for_score(score) - paid_crystals
+		paid_crystals += earned
+		var daily_paid := Progress.pay_daily() if daily else 0
+		Progress.add_crystals(maxi(earned, 0))
+		last_earned = maxi(earned, 0) + daily_paid
+		tiers = _pay_xp(10 + mini(score / 50, 40) + (30 if daily_paid > 0 else 0))
+		Progress.report("games_" + mode.id)
+		Progress.report("max_combo", keeper.best_combo)
+		Progress.report("play_secs", int(play_time))
+		Progress.flush()
 	ui.over_title.text = L.t("stuck" if reason == "stuck" else ("no_strikes" if reason == "strikes" else "times_up"))
 	ui.over_score.text = str(score)
 	ui.over_best.visible = is_best and score > 0
@@ -804,7 +976,8 @@ func _on_slot(p: Vector2i) -> void:
 	board.ripple(p)
 	var gone := logic.matches_from(p)
 	if mode.kind == "tutorial" and tut_step < 3 and p != _tutorial_target():
-		_toast(L.t("tut_wrong"))
+		# Keep feedback in the guidance row so the last pair remains visible on short phones.
+		tut_label.text = L.t("tut_wrong") + "\n" + str(tut_label.get_meta("instruction"))
 		return
 	if mode.kind == "zen":
 		strikes -= 1 if not gone.is_empty() else 2  # a miss costs two steps
@@ -893,9 +1066,10 @@ func _on_slot(p: Vector2i) -> void:
 		Sfx.play("knock%d" % mini(n, 4), pow(2.0, semi / 12.0))
 	else:
 		Sfx.play("knock%d" % mini(n, 4), 1.0 + mini(res.combo, 12) * 0.025)
-	Progress.report("gems", vanish.size())
-	if res.tier_up and res.mult == 4:
-		Progress.report("combo4")
+	if not _ab_active:
+		Progress.report("gems", vanish.size())
+		if res.tier_up and res.mult == 4:
+			Progress.report("combo4")
 	if res.time > 0 and (mode.kind == "classic" or mode.kind == "levels"):
 		_flash_delta("+%d" % int(res.time), false)
 	if res.tier_up:
@@ -917,7 +1091,8 @@ func _on_slot(p: Vector2i) -> void:
 		_banner(L.t("precise"), ScoreKeeper.PRECISE_POINTS, ScoreKeeper.PRECISE_TIME, BRASS_LIGHT)
 		if mode.skin == "bright":
 			board.play_confetti(50)
-		_set_theme(_next_look())
+		if mode.id != "bright" or daily:
+			_set_theme(_next_look())
 	elif event == "perfect":
 		if mode.skin == "bright":
 			Sfx.play("perfect")
@@ -929,10 +1104,15 @@ func _on_slot(p: Vector2i) -> void:
 		board.flash(Color.WHITE, 0.4)
 		board.shake(0.3)
 		_banner(L.t("perfect"), ScoreKeeper.PERFECT_POINTS, ScoreKeeper.PERFECT_TIME, Color("#ff9ed2"))
-		Progress.report("perfects")
+		if not _ab_active:
+			Progress.report("perfects")
 		if mode.skin == "bright":
 			board.play_confetti(90)
-		_set_theme(_next_look())
+		if mode.id != "bright" or daily:
+			_set_theme(_next_look())
+	var palette_event: bool = mode.id == "bright" and not daily and (event != "" or res.combo in [30,50])
+	if palette_event:
+		_set_theme(_next_look())  # A special and a streak threshold on one strike count once.
 	_update_combo_widget(res.tier_up)
 	if autoplay and (event != "" or res.tier_up):
 		print("[autoplay] combo=%d mult=%d event=%s" % [res.combo, res.mult, event])
@@ -973,7 +1153,7 @@ func _on_slot(p: Vector2i) -> void:
 		if mode.kind == "levels":
 			_end_level()
 		elif mode.waves:
-			_next_wave(p)
+			_next_wave(p,palette_event)
 		else:
 			end_game("stuck")
 	elif mode.kind == "zen" and strikes <= 0:
@@ -985,16 +1165,17 @@ func _process(delta: float) -> void:
 		_menu_t += delta
 		for i in ui.home_gems.size():
 			var g: TextureRect = ui.home_gems[i]
-			g.rotation = sin(_menu_t * 1.3 + i * 1.7) * 0.12
+			g.rotation = sin(_menu_t * 1.0 + i * 1.7) * 0.06
 			g.scale = Vector2.ONE * (1.0 + 0.06 * sin(_menu_t * 2.0 + i * 2.1))
 		var pb: Button = ui.btn_home_play
 		pb.pivot_offset = pb.size / 2
-		pb.scale = Vector2.ONE * (1.0 + 0.035 * sin(_menu_t * 3.0))
+		pb.scale = Vector2.ONE * (1.0 + 0.008 * sin(_menu_t * 2.0))
 	if absf(score - shown_score) > 0.5:
 		shown_score = lerpf(shown_score, score, minf(1.0, delta * 10.0))
 	else:
 		shown_score = score
-	score_label.text = str(int(round(shown_score)))
+	_set_hud_number(score_label, int(round(shown_score)))
+	_poll_classic_safe_area(delta)
 	_update_hand()
 	if state != State.PLAYING:
 		return
@@ -1010,7 +1191,7 @@ func _process(delta: float) -> void:
 	if keeper.update(play_time):
 		_combo_break()
 	if keeper.combo >= 2:
-		combo_bar.value = keeper.window_left(play_time) / ScoreKeeper.COMBO_WINDOW * 100.0
+		combo_bar.value = keeper.window_left(play_time) / keeper.combo_window * 100.0
 	idle += delta
 	if autoplay:
 		_auto_t += delta
@@ -1281,12 +1462,60 @@ func _input(event: InputEvent) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
+		if OS.is_debug_build() and event.keycode in [KEY_F6, KEY_F7] and state in [State.MENU, State.OVER]:
+			debug_start_combo_ab("A" if event.keycode == KEY_F6 else "B", ComboExperiment.board_seed)
+			get_viewport().set_input_as_handled()
+			return
+		if OS.is_debug_build() and event.keycode == KEY_N and state in [State.MENU, State.OVER]:
+			debug_start_special_combo("timed", ComboExperiment.board_seed)
+			get_viewport().set_input_as_handled()
+			return
 		if event.keycode in [KEY_ESCAPE, KEY_P]:
 			if state == State.PLAYING:
 				pause_game()
 			elif state == State.PAUSED:
 				_resume_play()
 			get_viewport().set_input_as_handled()
+
+
+## F6/F7 and MCP share this entry point. Never switch rules during a live round.
+func debug_start_combo_ab(variant: String, fixed_seed := 42) -> bool:
+	if not OS.is_debug_build() or state not in [State.MENU, State.OVER]:
+		return false
+	if not ComboExperiment.select(variant, fixed_seed):
+		return false
+	start_game("classic")
+	return true
+
+
+## Special-mechanic comparison at the same ordinary 3.5-second window.
+func debug_start_special_combo(rules: String, fixed_seed := 42) -> bool:
+	if not OS.is_debug_build() or state not in [State.MENU, State.OVER]:
+		return false
+	if not ComboExperiment.select_special(rules, fixed_seed):
+		return false
+	start_game("classic")
+	return true
+
+
+func _report_combo_ab(reason: String) -> void:
+	if not _ab_active or _ab_reported:
+		return
+	_ab_reported = true
+	_ab_result_index += 1
+	last_combo_report = _ab_run.duplicate(true)
+	last_combo_report.merge({"result_index": _ab_result_index, "score": score,
+		"destroyed_gems": cleared, "max_streak": keeper.best_combo,
+		"combo_breaks": keeper.combo_breaks, "hits_at_x4": keeper.hits_at_x4,
+		"precise_events": keeper.precise_events, "perfect_events": keeper.perfect_events,
+		"special_bonus_points": keeper.special_bonus_points, "special_bonus_time": keeper.special_bonus_time,
+		"end_reason": reason, "time_left": maxf(0.0, time_left), "play_time": play_time,
+		"used_continue": used_continue, "used_shuffle": used_shuffle})
+	ComboExperiment.append_report(last_combo_report)
+
+
+func _exit_tree() -> void:
+	_report_combo_ab("quit")
 
 
 # ================= leaderboard =================
@@ -1524,6 +1753,7 @@ func _build() -> void:
 		margin.add_theme_constant_override("margin_" + side, 16)
 	add_child(margin)
 	var col := VBoxContainer.new()
+	board_column = col
 	col.add_theme_constant_override("separation", 10)
 	margin.add_child(col)
 
@@ -1544,6 +1774,10 @@ func _build() -> void:
 	score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	score_label.add_theme_constant_override("outline_size", 10)
 	score_label.add_theme_color_override("font_outline_color", Color(0.05, 0.07, 0.2, 0.6))
+	ui.run_score_caption = _caption("")
+	ui.run_score_caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ui.run_score_caption.visible = false
+	mid.add_child(ui.run_score_caption)
 	mid.add_child(score_label)
 	var brow := HBoxContainer.new()
 	brow.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -1555,6 +1789,10 @@ func _build() -> void:
 	crown.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	crown.modulate = BRASS
 	best_label = _label("0", f_num, 20, BRASS)
+	ui.run_crown = crown
+	ui.run_best_caption = _caption("")
+	ui.run_best_caption.visible = false
+	brow.add_child(ui.run_best_caption)
 	brow.add_child(crown)
 	brow.add_child(best_label)
 	level_label = _label("", f_bold, 16, MUTED)
@@ -1580,6 +1818,10 @@ func _build() -> void:
 	time_label = _label("120", f_num, 22)
 	time_delta = _label("", f_num, 18, BRASS)
 	time_delta.modulate.a = 0.0
+	ui.run_time_caption = _caption("")
+	ui.run_time_caption.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	ui.run_time_caption.visible = false
+	trow.add_child(ui.run_time_caption)
 	trow.add_child(time_bar)
 	trow.add_child(time_label)
 	trow.add_child(time_delta)
@@ -1617,6 +1859,7 @@ func _build() -> void:
 		"bar": time_bar, "delta": time_delta, "combo_box": combo_box, "combo_style": combo_style, "combo_mult": combo_mult,
 		"combo_count": combo_count, "combo_bar": combo_bar, "pause": btn_pause, "restart": btn_restart, "settings": btn_settings}
 	_build_classic_hud(col)
+	_build_classic_side_hud(col)
 
 	# ---- board ----
 	board = BoardView.new()
@@ -1673,23 +1916,23 @@ func _build() -> void:
 	toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(toast)
 
-	# tutorial: a hint line at the top and a pointing hand over the target slot
-	tut_label = _label("", f_bold, 22, CREAM)
+	# Tutorial guidance reserves its own row above the board, including wrapped text.
+	tut_label = _label("", f_bold, 20, MENU_TEXT)
 	tut_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tut_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	tut_label.add_theme_stylebox_override("normal", _box(Color(0.05, 0.08, 0.22, 0.9), BRASS, 2, 14, Vector4(16, 10, 16, 10)))
-	tut_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP, Control.PRESET_MODE_MINSIZE, 90)
-	tut_label.custom_minimum_size.x = 320
-	tut_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	tut_label.add_theme_stylebox_override("normal", _box(Color(MENU_PANEL, .96), Color(MENU_BRASS, .65), 1, 14, Vector4(16, 10, 16, 10)))
+	tut_label.custom_minimum_size.y = 96
+	tut_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	tut_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tut_label.visible = false
 	tut_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(tut_label)
+	board_column.add_child(tut_label)
+	board_column.move_child(tut_label, board.get_index())
 	tut_hand = TextureRect.new()
 	tut_hand.texture = ICONS["hand"]
-	tut_hand.custom_minimum_size = Vector2(56, 56)
-	tut_hand.size = Vector2(56, 56)
 	tut_hand.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	tut_hand.modulate = BRASS_LIGHT
+	tut_hand.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tut_hand.modulate = MENU_BRASS
 	tut_hand.visible = false
 	tut_hand.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(tut_hand)
@@ -1807,8 +2050,201 @@ func _build_classic_hud(col: VBoxContainer) -> void:
 		"combo_bar": c_cbar, "pause": c_pause, "restart": c_restart, "settings": c_settings}
 
 
+## Android Classic keeps both side rails on every screen; all other HUDs stay intact.
+func _classic_android_sides() -> bool:
+	return OS.has_feature("android") and mode.id == "classic"
+
+
+func _side_label(text: String, font: Font, font_size: int, color := CREAM) -> Label:
+	var label := _label(text, font, font_size, color)
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.size_flags_horizontal = Control.SIZE_FILL
+	label.add_theme_constant_override("line_spacing", 0)
+	return label
+
+
+func _side_stat(caption: Label, value: Label) -> VBoxContainer:
+	var block := VBoxContainer.new()
+	block.add_theme_constant_override("separation", 2)
+	block.add_child(caption)
+	block.add_child(value)
+	return block
+
+
+func _build_classic_side_hud(col: VBoxContainer) -> void:
+	classic_sides = HBoxContainer.new()
+	classic_sides.name = "ClassicAndroidSides"
+	classic_sides.add_theme_constant_override("separation", 4)
+	classic_sides.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	classic_sides.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	classic_sides.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	classic_sides.visible = false
+	col.add_child(classic_sides)
+	classic_stats = VBoxContainer.new()
+	classic_stats.name = "Statistics"
+	classic_stats.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	classic_stats.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	classic_stats.add_theme_constant_override("separation", 4)
+	classic_stats.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	classic_sides.add_child(classic_stats)
+
+	var c_time := _side_label("120", f_num, 28)
+	var c_delta := _side_label("", f_num, 16, BRASS)
+	c_delta.modulate.a = 0.0
+	var c_time_caption := _side_label("", f_bold, 12, MUTED)
+	c_time_caption.uppercase = true
+	var timer := _side_stat(c_time_caption, c_time)
+	var c_bar := ProgressBar.new()
+	c_bar.show_percentage = false
+	c_bar.custom_minimum_size.y = 6
+	c_bar.max_value = 100
+	timer.add_child(c_bar)
+	timer.add_child(c_delta)
+	classic_stats.add_child(timer)
+
+	var c_score := _side_label("0", f_num, 24)
+	var c_score_caption := _side_label("", f_bold, 12, MUTED)
+	c_score_caption.uppercase = true
+	classic_stats.add_child(_side_stat(c_score_caption, c_score))
+	var c_best := _side_label("0", f_num, 24)
+	var c_best_caption := _side_label("", f_bold, 12, MUTED)
+	c_best_caption.uppercase = true
+	classic_stats.add_child(_side_stat(c_best_caption, c_best))
+
+	var c_combo := PanelContainer.new()
+	var c_style := _box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0, Vector4.ZERO)
+	c_combo.add_theme_stylebox_override("panel", c_style)
+	var combo := VBoxContainer.new()
+	combo.add_theme_constant_override("separation", 2)
+	var c_count := _side_label("", f_bold, 12, MUTED)
+	c_count.uppercase = true
+	var c_mult := _side_label("", f_display, 30, BRASS)
+	var c_cbar := ProgressBar.new()
+	c_cbar.show_percentage = false
+	c_cbar.custom_minimum_size.y = 4
+	combo.add_child(c_count)
+	combo.add_child(c_mult)
+	combo.add_child(c_cbar)
+	c_combo.add_child(combo)
+	c_combo.modulate.a = 0.0
+	classic_stats.add_child(c_combo)
+
+	classic_actions = VBoxContainer.new()
+	classic_actions.name = "Actions"
+	classic_actions.alignment = BoxContainer.ALIGNMENT_CENTER
+	classic_actions.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	classic_actions.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	classic_actions.add_theme_constant_override("separation", 16)
+	classic_actions.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	classic_sides.add_child(classic_actions)
+	var c_pause := _icon_button("pause", func(): Sfx.play("click"); pause_game())
+	var c_restart := _icon_button("restart", func(): Sfx.play("click"); start_game(mode.id, daily))
+	var c_settings := _icon_button("settings", _open_settings_from_hud)
+	for button in [c_pause, c_restart, c_settings]:
+		classic_actions.add_child(button)
+	hud_sets["classic_android"] = {"roots": [classic_sides], "score": c_score, "best": c_best, "time": c_time, "bar": c_bar,
+		"delta": c_delta, "combo_box": c_combo, "combo_style": c_style, "combo_mult": c_mult, "combo_count": c_count,
+		"combo_bar": c_cbar, "pause": c_pause, "restart": c_restart, "settings": c_settings,
+		"captions": {"time": c_time_caption, "score": c_score_caption, "best": c_best_caption}}
+
+
+func _set_classic_side_layout(enabled: bool) -> void:
+	if not board:
+		return
+	var parent: Control = classic_sides if enabled else board_column
+	if board.get_parent() != parent:
+		if not enabled:
+			board.custom_minimum_size.x = 0.0
+			board.custom_maximum_size.x = -1.0
+			board.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		board.reparent(parent, false)
+	if enabled:
+		classic_sides.move_child(board, 1)
+		title_label.visible = false
+
+
+func _constrain_side_width(node: Control, width: float) -> void:
+	node.custom_maximum_size.x = width
+	for child in node.get_children():
+		if child is Control:
+			_constrain_side_width(child, width)
+
+
+func _layout_classic_sides(view: Vector2, insets: Rect2) -> void:
+	var side_inset := maxf(ceilf(insets.position.x),ceilf(insets.size.x))
+	var vertical_inset := maxf(ceilf(insets.position.y),ceilf(insets.size.y))
+	var safe_height := view.y - vertical_inset*2.0 - 8.0
+	# Center on the full screen. HUD blocks sit halfway from its edges to the frame.
+	# Reserve enough outer space for cutouts without shifting any of those centres.
+	var fit_cell := maxf(8.0, floorf(minf((view.x - side_inset*4.0 - 140.0 - 16.0 - 6.0) / 23.0,
+		(safe_height - 6.0) / 15.0)))
+	var board_width := fit_cell * 23.0 + 6.0
+	var content := floorf(clampf((view.x-board_width)*0.5-side_inset*2.0-8.0,70.0,80.0))
+	board.size_flags_horizontal = Control.SIZE_FILL
+	board.custom_minimum_size.x = board_width
+	board.custom_maximum_size.x = board_width
+	classic_stats.custom_minimum_size.x = content
+	classic_actions.custom_minimum_size.x = content
+	# Center each compact HUD block between the screen edge and the board frame.
+	# The outer margin and the gap to the board are both 4 px.
+	for block in classic_stats.get_children():
+		block.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		block.custom_minimum_size.x = content
+		_constrain_side_width(block, content)
+	for button in classic_actions.get_children():
+		button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		button.custom_minimum_size = Vector2.ONE * content
+		button.custom_maximum_size.x = content
+	hud_sets.classic_android.time.add_theme_font_size_override("font_size", 26 if content < 74.0 else 28)
+	_classic_safe_area = insets
+
+
+func _set_hud_number(label: Label, value: int) -> void:
+	var text := str(value)
+	if _classic_android_sides():
+		var width := maxf(classic_stats.custom_minimum_size.x, 70.0)
+		var font_size := 18
+		if text.length() <= 6:
+			var measured := f_num.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 24).x
+			font_size = clampi(floori(24.0 * (width - 4.0) / maxf(measured, 1.0)), 18, 24)
+		else:
+			# Keep every digit. Spaces allow large scores to wrap at whole thousands.
+			var grouped := ""
+			for i in text.length():
+				if i > 0 and (text.length() - i) % 3 == 0:
+					grouped += "\u2009"
+				grouped += text[i]
+			text = grouped
+			if width < 74.0:
+				# Six-digit lines fit at 18 px even in the narrowest symmetric rail.
+				# Line breaks remain at whole-thousands boundaries; every digit is kept.
+				var digits := str(value)
+				text = ""
+				var head := digits.length() % 6
+				if head == 0:
+					head = 6
+				text = digits.substr(0, head)
+				for start in range(head, digits.length(), 6):
+					text += "\n" + digits.substr(start, 6)
+		label.add_theme_font_size_override("font_size", font_size)
+	label.text = text
+
+
+func _poll_classic_safe_area(delta: float) -> void:
+	if not _classic_android_sides():
+		return
+	_classic_safe_poll += delta
+	if _classic_safe_poll >= 0.25:
+		_classic_safe_poll = 0.0
+		if _safe_insets() != _classic_safe_area:
+			_on_viewport_resized()
+
+
 ## Show the HUD that belongs to `id` and point the shared widget variables at it.
 func _apply_hud(id: String) -> void:
+	if id == "classic" and _classic_android_sides():
+		id = "classic_android"
 	for k in hud_sets:
 		for n in hud_sets[k].roots:
 			n.visible = k == id
@@ -1826,6 +2262,28 @@ func _apply_hud(id: String) -> void:
 	btn_pause = set.pause
 	btn_restart = set.restart
 	btn_settings = set.settings
+	_set_classic_side_layout(id == "classic_android")
+
+
+## Keep Bright's two-row geometry: _dims() uses the remaining board area.
+## This changes paint and typography only; hidden modes retain their original HUD.
+func _style_run_hud(unified: bool) -> void:
+	var run: Dictionary = hud_sets.bright
+	ui.run_score_caption.visible = unified
+	ui.run_best_caption.visible = unified
+	ui.run_time_caption.visible = unified
+	ui.run_crown.visible = not unified
+	hud.custom_minimum_size.y = 93 if unified else 0
+	time_row.custom_minimum_size.y = 35 if unified else 0
+	run.score.add_theme_font_override("font", f_num if unified else f_display)
+	run.score.add_theme_font_size_override("font_size", 28 if unified else 54)
+	run.score.add_theme_constant_override("outline_size", 0 if unified else 10)
+	run.bar.custom_minimum_size.y = 6 if unified else 10
+	run.best.add_theme_color_override("font_color", CREAM if unified else BRASS)
+	run.combo_mult.add_theme_constant_override("outline_size", 0 if unified else 8)
+	run.combo_mult.add_theme_color_override("font_color", BRASS if unified else CREAM)
+	run.combo_style.border_color = Color.TRANSPARENT if unified else Color(1, 1, 1, 0.5)
+	run.combo_style.bg_color = Color.TRANSPARENT if unified else COMBO_COLORS[0]
 
 
 func _panel() -> Array:
@@ -1847,6 +2305,27 @@ func _row(children: Array) -> HFlowContainer:
 	return r
 
 
+## Local overrides keep other screens and gameplay HUD unchanged.
+func _style_menu_button(b: Button, primary: bool) -> void:
+	for state_name in ["normal", "hover", "pressed", "disabled", "focus"]:
+		var fill := MENU_BRASS if primary else Color(MENU_PANEL, .85)
+		var edge := Color(MENU_BRASS, .6)
+		if state_name == "hover":
+			fill = fill.lightened(.12)
+			edge = MENU_TEXT
+		elif state_name == "pressed":
+			fill = fill.darkened(.15)
+		elif state_name == "focus":
+			fill = Color.TRANSPARENT
+			edge = MENU_TEXT
+		elif state_name == "disabled":
+			fill.a = .35
+			edge.a = .25
+		b.add_theme_stylebox_override(state_name, _box(fill, edge, 2 if state_name == "focus" else 1, 10, Vector4(16,12,16,12)))
+	for key in ["font_color","font_hover_color","font_pressed_color","font_focus_color","icon_normal_color","icon_hover_color","icon_pressed_color","icon_focus_color"]:
+		b.add_theme_color_override(key, Color("#112326") if primary else MENU_TEXT)
+
+
 ## Home screen: floating gems over a big title, one big Play button, the best score, and a row
 ## of round buttons (leaderboard, daily board, how to play, settings).
 func _build_menu() -> void:
@@ -1859,8 +2338,19 @@ func _build_menu() -> void:
 	move_child(home, center.get_index())
 	var v := VBoxContainer.new()
 	v.alignment = BoxContainer.ALIGNMENT_CENTER
-	v.add_theme_constant_override("separation", 18)
-	home.add_child(v)
+	v.add_theme_constant_override("separation", 16)
+	ui.home_stack = v
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = true
+	ui.home_scroll = scroll
+	drag_scrolls.append(scroll)
+	home.add_child(scroll)
+	var content := CenterContainer.new()
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.add_child(content)
+	content.add_child(v)
 
 	var gems := HBoxContainer.new()
 	gems.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -1877,12 +2367,12 @@ func _build_menu() -> void:
 		ui.home_gems.append(t)
 	v.add_child(gems)
 
-	ui.menu_title = _label("", f_display, 64, BRASS)
+	ui.menu_title = _label("", f_display, 58, MENU_TEXT)
 	ui.menu_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	ui.menu_title.add_theme_constant_override("outline_size", 16)
+	ui.menu_title.add_theme_constant_override("outline_size", 0)
 	ui.menu_title.add_theme_color_override("font_outline_color", Color(0.04, 0.05, 0.15, 0.85))
 	ui.menu_tag = _para("")
-	ui.menu_tag.add_theme_color_override("font_color", MUTED)
+	ui.menu_tag.add_theme_color_override("font_color", MENU_MUTED)
 	v.add_child(ui.menu_title)
 	v.add_child(ui.menu_tag)
 
@@ -1895,8 +2385,9 @@ func _build_menu() -> void:
 			_show_panel(mode_panel)
 		else:
 			start_game("tutorial"))
-	ui.btn_home_play.custom_minimum_size = Vector2(280, 78)
-	ui.btn_home_play.add_theme_font_size_override("font_size", 32)
+	_style_menu_button(ui.btn_home_play, true)
+	ui.btn_home_play.custom_minimum_size = Vector2(280, 68)
+	ui.btn_home_play.add_theme_font_size_override("font_size", 28)
 	ui.btn_home_play.add_theme_constant_override("icon_max_width", 34)
 	ui.btn_home_play.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	v.add_child(ui.btn_home_play)
@@ -1904,31 +2395,30 @@ func _build_menu() -> void:
 	brow.alignment = BoxContainer.ALIGNMENT_CENTER
 	brow.add_theme_constant_override("separation", 8)
 	brow.add_child(_crown(24))
-	ui.home_best = _label("", f_num, 22, BRASS)
+	ui.home_best = _label("", f_num, 18, MENU_MUTED)
 	brow.add_child(ui.home_best)
 	v.add_child(brow)
 	ui.daily_card = _button("", "calendar", false, func(): Sfx.play("click"); start_game("bright", true))
-	for st in ["normal", "hover", "pressed", "focus"]:
-		ui.daily_card.add_theme_stylebox_override(st, _box(Color("#a35cff", 0.32 if st == "normal" else 0.5), Color("#c99bff"),
-			3 if st == "focus" else 2, 16, Vector4(20, 12, 20, 12)))
-	ui.daily_card.add_theme_font_size_override("font_size", 19)
+	_style_menu_button(ui.daily_card, false)
+	ui.daily_card.add_theme_font_size_override("font_size", 17)
+	ui.daily_card.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	ui.daily_card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	ui.daily_card.custom_minimum_size = Vector2(300, 0)
 	v.add_child(ui.daily_card)
 
 	var gap2 := Control.new()
-	gap2.custom_minimum_size.y = 18
+	gap2.custom_minimum_size.y = 8
 	v.add_child(gap2)
 	var crow2 := HBoxContainer.new()
 	crow2.alignment = BoxContainer.ALIGNMENT_CENTER
 	crow2.add_theme_constant_override("separation", 6)
 	crow2.add_child(_icon_tex("crystal", 24, Color("#7fd8ff")))
-	ui.home_crystals = _label("0", f_num, 22, Color("#7fd8ff"))
+	ui.home_crystals = _label("0", f_num, 18, MENU_TEXT)
 	crow2.add_child(ui.home_crystals)
 	v.add_child(crow2)
 	var row := HFlowContainer.new()
 	row.alignment = FlowContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("h_separation", 14)
+	row.add_theme_constant_override("h_separation", 12)
 	row.add_theme_constant_override("v_separation", 10)
 	ui.home_leaders = _round_button("trophy", func(): _open_leaders(menu_panel))
 	ui.home_rules = _round_button("info", func(): Sfx.play("click"); _show_rules())
@@ -1937,6 +2427,7 @@ func _build_menu() -> void:
 	ui.home_settings = _round_button("settings", func(): _open_settings(menu_panel))
 	ui.home_tasks = _round_button("tasks", func(): Sfx.play("click"); _refresh_tasks(); _show_panel(tasks_panel))
 	ui.home_coll = _round_button("crystal", func(): Sfx.play("click"); _refresh_collection(); _show_panel(collection_panel))
+	ui.home_coll.visible = Progress.COSMETICS_ENABLED
 	ui.home_gift = _round_button("gift", func(): Sfx.play("click"); _refresh_gift(); _show_panel(gift_panel))
 	ui.home_ach = _round_button("medal", func(): Sfx.play("click"); _refresh_achievements(); _show_panel(ach_panel))
 	for b in [ui.home_gift, ui.home_pass, ui.home_tasks, ui.home_ach, ui.home_coll, ui.home_leaders, ui.home_stats, ui.home_rules, ui.home_settings]:
@@ -1973,15 +2464,14 @@ func _round_button(icon_name: String, cb: Callable) -> VBoxContainer:
 	var b := Button.new()
 	b.icon = ICONS[icon_name]
 	b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	b.custom_minimum_size = Vector2(68, 68)
+	b.custom_minimum_size = Vector2(56, 56)
 	b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	b.add_theme_constant_override("icon_max_width", 30)
-	for st in ["normal", "hover", "pressed", "focus"]:
-		var sb: StyleBoxFlat = (theme.get_stylebox(st, "Button") as StyleBoxFlat).duplicate()
-		sb.set_corner_radius_all(34)
-		b.add_theme_stylebox_override(st, sb)
+	_style_menu_button(b, false)
 	b.pressed.connect(cb)
-	var cap := _label("", f_bold, 14, MUTED)
+	var cap := _label("", f_bold, 13, MENU_MUTED)
+	cap.custom_minimum_size.x = 90
+	cap.autowrap_mode = TextServer.AUTOWRAP_OFF
 	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(b)
 	box.add_child(cap)
@@ -2003,7 +2493,9 @@ func _build_modes() -> void:
 	root.add_child(v)
 	var head := HBoxContainer.new()
 	var back := _icon_button("back", func(): Sfx.play("click"); _show_panel(menu_panel))
-	ui.mode_title = _label("", f_display, 34, BRASS)
+	_style_menu_button(back, false)
+	ui.mode_back = back
+	ui.mode_title = _label("", f_display, 32, MENU_TEXT)
 	ui.mode_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	ui.mode_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var balance := Control.new()
@@ -2019,36 +2511,38 @@ func _build_modes() -> void:
 	cc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cc.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	drag_scrolls.append(scroll)
-	var flow := HFlowContainer.new()
-	flow.alignment = FlowContainer.ALIGNMENT_CENTER
-	flow.add_theme_constant_override("h_separation", 20)
+	var flow := GridContainer.new()
+	flow.columns = 2
+	flow.add_theme_constant_override("h_separation", 24)
 	flow.add_theme_constant_override("v_separation", 20)
+	ui.mode_grid = flow
+	ui.mode_scroll = scroll
+	scroll.follow_focus = true
 	ui.mode_cards = []
 	for id in (["levels", "bright", "zen", "puzzle", "classic"] if OS.has_feature("android")
 			else ["classic", "levels", "bright", "zen", "puzzle"]):
 		var card := PanelContainer.new()
-		var accent: Color = {"classic": BRASS, "levels": Color("#22c97a"), "bright": Color("#3d8bff"), "zen": Color("#a35cff"),
-			"puzzle": Color("#ff9a2e")}[id]
-		card.add_theme_stylebox_override("panel", _box(PANEL, accent, 3, 20, Vector4(16, 16, 16, 18)))
+		var accent: Color = MENU_BRASS if id in MENU_MODES else BRASS
+		card.add_theme_stylebox_override("panel", _box(Color(MENU_PANEL, .94), Color(accent,.65), 1, 14, Vector4(18, 18, 18, 20)))
 		var cv := VBoxContainer.new()
 		cv.add_theme_constant_override("separation", 10)
-		var pv := TextureRect.new()
-		pv.texture = load("res://assets/ui/preview_%s.png" % ("classic" if id == "classic" else "bright"))
-		pv.custom_minimum_size = Vector2(0, 150)
-		pv.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		pv.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-		pv.clip_contents = true
+		var pv := MenuPreview.new()
+		pv.visual_profile = "classic" if id == "classic" else "classic_run"
+		pv.number_font = f_num
+		pv.custom_minimum_size = Vector2(0, 180)
+		ui["card_preview_" + id] = pv
 		cv.add_child(pv)
-		ui["card_name_" + id] = _label("", f_display, 28, accent.lightened(0.2))
+		ui["card_name_" + id] = _label("", f_display, 28, MENU_TEXT)
 		ui["card_desc_" + id] = _para("")
 		ui["card_desc_" + id].add_theme_font_size_override("font_size", 17)
-		ui["card_desc_" + id].add_theme_color_override("font_color", MUTED)
+		ui["card_desc_" + id].add_theme_color_override("font_color", MENU_MUTED)
+		ui["card_desc_" + id].size_flags_vertical = Control.SIZE_EXPAND_FILL
 		cv.add_child(ui["card_name_" + id])
 		cv.add_child(ui["card_desc_" + id])
 		var br := HBoxContainer.new()
 		br.add_theme_constant_override("separation", 6)
 		br.add_child(_crown(20))
-		ui["card_best_" + id] = _label("", f_num, 18, BRASS)
+		ui["card_best_" + id] = _label("", f_num, 18, MENU_MUTED)
 		br.add_child(ui["card_best_" + id])
 		cv.add_child(br)
 		var mode_id: String = id
@@ -2058,6 +2552,7 @@ func _build_modes() -> void:
 			ui["card_play_" + id] = _button("", "puzzle", true, func(): Sfx.play("click"); _open_map("puzzle"))
 		else:
 			ui["card_play_" + id] = _button("", "play", true, func(): Sfx.play("click"); start_game(mode_id))
+		_style_menu_button(ui["card_play_" + id], true)
 		cv.add_child(ui["card_play_" + id])
 		card.add_child(cv)
 		flow.add_child(card)
@@ -2349,6 +2844,8 @@ func _build_collection() -> void:
 
 
 func _refresh_collection() -> void:
+	if not Progress.COSMETICS_ENABLED:
+		return
 	ui.coll_crystals.text = str(Progress.crystals)
 	var grid: GridContainer = ui.coll_grid
 	for c in grid.get_children():
@@ -2448,7 +2945,7 @@ func _refresh_gift() -> void:
 		ui.gift_days.add_child(box)
 	ui.btn_gift.visible = ready
 	ui.btn_gift.text = L.t("take")
-	ui.gift_line.text = L.t("gift_day7") if ready else L.t("gift_tomorrow")
+	ui.gift_line.text = L.t("gift_day7" if Progress.COSMETICS_ENABLED else "gift_daily_crystals") if ready else L.t("gift_tomorrow")
 
 
 func _open_gift() -> void:
@@ -2456,7 +2953,7 @@ func _open_gift() -> void:
 	if r.is_empty():
 		return
 	Sfx.play("level")
-	_toast(L.t("gift_got", {"n": r.crystals}) + ("  ·  " + L.t("gift_look") if int(r.look) >= 0 else ""))
+	_toast(L.t("gift_got", {"n": r.crystals}) + ("  ·  " + L.t("gift_look") if Progress.COSMETICS_ENABLED and int(r.look) >= 0 else ""))
 	_refresh_gift()
 	_refresh_menu_bests()
 
@@ -2567,6 +3064,10 @@ func _refresh_pass() -> void:
 		c.queue_free()
 	for t in range(1, Progress.PASS_TIERS + 1):
 		var r := Progress.pass_reward(t)
+		if not Progress.COSMETICS_ENABLED and r.kind == "look":
+			if t in Progress.season_claimed or not Progress.owns(int(r.n)):
+				continue  # Earned new packs are banked silently; no cosmetic-only controls.
+			r = {"kind": "crystals", "n": 200}  # Existing duplicate-pack compensation.
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 10)
 		var num := _label(str(t), f_display, 20, BRASS if t <= tier else MUTED)
@@ -3049,6 +3550,11 @@ func _apply_texts() -> void:
 	time_caption.text = L.t("time")
 	score_caption.text = L.t("score")
 	best_caption.text = L.t("best")
+	for key in hud_sets.classic_android.captions:
+		hud_sets.classic_android.captions[key].text = L.t(key)
+	ui.run_score_caption.text = L.t("score")
+	ui.run_best_caption.text = L.t("best")
+	ui.run_time_caption.text = L.t("time")
 	ui.menu_title.text = L.t("title")
 	ui.menu_tag.text = L.t("tagline")
 	ui.how.text = L.t("how_title")
@@ -3122,7 +3628,15 @@ func _pop(c: Control, k := 1.25) -> void:
 
 
 func _show_panel(p: Control) -> void:
+	if p == collection_panel and not Progress.COSMETICS_ENABLED:
+		p = menu_panel  # Also closes debug/deep-link routes to the dormant shop.
+	tut_hand.visible = p == null and mode.kind == "tutorial" and tut_step < TUT_MOVES.size()
 	var was_dim := dim.visible
+	var menu_surface := p == menu_panel or p == mode_panel
+	if menu_surface:
+		board.reset_run_surface()
+		ambient.reset_velvet_palette()
+	ambient.set_skin("classic" if menu_surface else (mode.skin if state == State.MENU else ("classic" if visual_profile == "classic_run" else visual_profile)))
 	if p == menu_panel or p == mode_panel:
 		_set_orientation(false)
 	var on_menu := p == menu_panel or p == mode_panel or p == map_panel
@@ -3132,7 +3646,7 @@ func _show_panel(p: Control) -> void:
 	margin.visible = not on_menu and state != State.MENU
 	for x in [menu_panel, mode_panel, pause_panel, over_panel, leaders_panel, settings_panel, rules_panel, map_panel, level_panel, tasks_panel, collection_panel, gift_panel, ach_panel, pass_panel, stats_panel, confirm_panel]:
 		x.visible = x == p
-	dim.visible = p != null
+	dim.visible = p != null and not menu_surface
 	btn_pause.disabled = state != State.PLAYING
 	btn_restart.disabled = state != State.PLAYING and state != State.PAUSED
 	if p:
@@ -3186,7 +3700,7 @@ func _update_hud() -> void:
 		time_bar.value = 100.0
 	elif mode.kind == "levels":
 		time_bar.value = clampf(time_left / _level_time(level_n), 0.0, 1.0) * 100.0
-	best_label.text = str(maxi(Save.best_for(mode.id), score))
+	_set_hud_number(best_label, maxi(Save.best_for(mode.id), score))
 	if level_label:
 		level_label.text = "· " + L.t("level_short", {"n": _level()})
 		level_label.visible = mode.kind == "levels" or mode.kind == "zen" or mode.kind == "puzzle"
@@ -3222,20 +3736,25 @@ func _toast(text: String) -> void:
 # ================= combo UI =================
 
 func _update_combo_widget(pulse := false) -> void:
+	combo_bar.value = keeper.window_left(play_time) / keeper.combo_window * 100.0
 	var c := keeper.combo
 	if c < 2:
 		combo_box.modulate.a = 0.0
 		return
 	var m := ScoreKeeper.multiplier_for(c)
 	combo_count.text = L.t("combo_count", {"n": c})
-	if mode.skin == "classic":
-		combo_mult.text = "×%d" % m
+	if visual_profile in ["classic", "classic_run"]:
+		combo_mult.text = ("×%d" % m) if mode.id == "classic" else ("×%d · %d" % [m, c])
 		combo_mult.add_theme_color_override("font_color", COMBO_COLORS[clampi(m, 1, 4) - 1].lightened(0.3))
 	else:
 		combo_mult.text = "%s ×%d · %d" % [L.t("combo").to_upper(), m, c]
 		combo_style.bg_color = COMBO_COLORS[clampi(m, 1, 4) - 1]
 	combo_box.modulate.a = 1.0
-	if pulse:
+	if pulse and _classic_android_sides():
+		# Pulse colour without expanding the rail into the board or a display cutout.
+		combo_mult.modulate = Color(1.3, 1.3, 1.3)
+		create_tween().tween_property(combo_mult, "modulate", Color.WHITE, 0.3)
+	elif pulse:
 		combo_box.pivot_offset = combo_box.size / 2
 		combo_box.scale = Vector2.ONE * 1.35
 		create_tween().tween_property(combo_box, "scale", Vector2.ONE, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
@@ -3275,7 +3794,7 @@ func _banner(title: String, pts: int, secs: float, color: Color, sub := "") -> v
 ## Board shape for the current screen: wide screens get 23x15, tall ones 15x23.
 ## Board shape for the free space under the HUD: tall phones get tall boards, wide screens wide ones.
 func _dims() -> Vector2i:
-	if mode.id == "classic" and (not _is_touch_device() or OS.has_feature("android")):
+	if mode.id == "classic" and (not _is_touch_device() or OS.has_feature("android") or _classic_android_sides()):
 		return Vector2i(mode.cols, mode.rows)  # the original wide board (desktop, Android turned sideways)
 	var slots: int = mode.slots
 	if mode.kind == "run":
@@ -3295,6 +3814,10 @@ func _board_area() -> Vector2:
 ## Fit the board to its area. Before a game starts the board is re-dealt in the best shape;
 ## during a game it is only transposed (when that shape fits better) or rescaled.
 func _relayout_board() -> void:
+	if mode.id == "bright" and (_run_starting or _run_dims != Vector2i.ZERO):
+		# Resize the rendering only; never regenerate or transpose an active run.
+		board.refresh()
+		return
 	var d := _dims()
 	if Vector2i(logic.cols, logic.rows) != d:
 		if state == State.MENU:
@@ -3309,7 +3832,7 @@ func _relayout_board() -> void:
 	var screen_tall := area.y > area.x * 1.15
 	var screen_wide := area.x > area.y * 1.15
 	if (screen_tall and logic.cols > logic.rows) or (screen_wide and logic.rows > logic.cols):
-		if not (mode.id == "classic" and not _is_touch_device()):
+		if not (mode.id == "classic" and (not _is_touch_device() or _classic_android_sides())):
 			logic.transpose()
 			board.transposed()
 	board.refresh()
@@ -3322,30 +3845,41 @@ func _on_viewport_resized() -> void:
 	if turn:
 		pause_game()
 	compact = s.x < 640 or s.y < 600
-	title_label.visible = s.x >= 980
+	title_label.visible = s.x >= 980 and not _classic_android_sides()
 	hud_classic.add_theme_constant_override("separation", 10 if compact else 18)
-	var m := 6 if compact else 16
+	var sides := _classic_android_sides()
+	var m := 4 if sides else (6 if compact else 16)
 	var inset := _safe_insets()
-	margin.add_theme_constant_override("margin_left", m + int(inset.position.x))
-	margin.add_theme_constant_override("margin_top", m + int(inset.position.y))
-	margin.add_theme_constant_override("margin_right", m + int(inset.size.x))
-	margin.add_theme_constant_override("margin_bottom", m + int(inset.size.y))
+	var rounded := Rect2(inset.position.ceil(), inset.size.ceil()) if sides else inset
+	if sides:
+		var vertical_inset := maxf(rounded.position.y,rounded.size.y)
+		rounded = Rect2(0.0,vertical_inset,0.0,vertical_inset)
+	margin.add_theme_constant_override("margin_left", m + int(rounded.position.x))
+	margin.add_theme_constant_override("margin_top", m + int(rounded.position.y))
+	margin.add_theme_constant_override("margin_right", m + int(rounded.size.x))
+	margin.add_theme_constant_override("margin_bottom", m + int(rounded.size.y))
 	hud.add_theme_constant_override("separation", 10 if compact else 22)
-	combo_box.custom_minimum_size.x = 64 if compact else 96
+	combo_box.custom_minimum_size.x = 64 if sides or compact else 96
 	var w := clampf(s.x - (24 if compact else 40), 260, 620)
 	for p in [pause_panel, over_panel, leaders_panel, settings_panel, rules_panel, level_panel, tasks_panel, collection_panel,
 			gift_panel, ach_panel, pass_panel, stats_panel, confirm_panel]:
 		p.custom_minimum_size.x = w
 		p.add_theme_stylebox_override("panel", panel_style_compact if compact else panel_style)
 	var short := s.y < 600
-	ui.menu_title.add_theme_font_size_override("font_size", 40 if short else (46 if s.x < 600 else 64))
+	ui.menu_title.add_theme_font_size_override("font_size", 36 if short else (40 if s.x < 600 else 58))
+	ui.mode_title.add_theme_font_size_override("font_size", 24 if s.x < 440 else 32)
 	ui.home_gems[0].get_parent().visible = s.y >= 560
-	(menu_panel.get_child(0) as VBoxContainer).add_theme_constant_override("separation", 8 if short else 18)
-	ui.btn_home_play.custom_minimum_size = Vector2(260, 62 if short else 78)
+	ui.home_stack.add_theme_constant_override("separation", 8 if short else 16)
+	ui.home_stack.custom_minimum_size.x = clampf(s.x - 64, 240, 960)
+	ui.daily_card.custom_minimum_size.x = minf(400, s.x - 72)
+	ui.btn_home_play.custom_minimum_size = Vector2(260, 60 if short else 68)
+	ui.mode_grid.columns = 2 if s.x >= 880 else 1
 	for card in ui.mode_cards:
-		card.custom_minimum_size.x = clampf(s.x - 48, 260, 380)
+		card.custom_minimum_size.x = 400 if s.x >= 880 else clampf(s.x - 64, 260, 440)
 	ui.over_score.add_theme_font_size_override("font_size", 52 if compact else 72)
-	board.frame_pad = 5.0 if compact else 10.0
+	board.frame_pad = 3.0 if sides else (5.0 if compact else 10.0)
+	if sides:
+		_layout_classic_sides(s, inset)
 	_relayout_board.call_deferred()
 	_fit_panels.call_deferred()
 
@@ -3413,7 +3947,8 @@ func _safe_insets() -> Rect2:
 	var top := maxi(0, safe.position.y - screen.position.y)
 	var right := maxi(0, screen.end.x - safe.end.x)
 	var bottom := maxi(0, screen.end.y - safe.end.y)
-	return Rect2(left * k, top * k, right * k, bottom * k)
+	var kx := get_viewport_rect().size.x / float(screen.size.x) if _classic_android_sides() else k
+	return Rect2(left * kx, top * k, right * kx, bottom * k)
 
 
 func _is_touch_device() -> bool:

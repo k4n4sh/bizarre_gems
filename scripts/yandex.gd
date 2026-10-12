@@ -10,6 +10,7 @@ signal pause_requested
 signal resume_requested
 
 const MIN_FULLSCREEN_GAP_MS := 61_000
+const ComboExperiment = preload("res://scripts/combo_experiment.gd")
 
 var available := false
 var is_ready := false
@@ -90,6 +91,8 @@ func open_auth(done: Callable) -> void:
 
 ## `board` is the leaderboard's technical name in the Yandex console.
 func submit_score(score: int, board := "score") -> void:
+	if ComboExperiment.is_read_only():
+		return
 	if _yg and available:
 		_yg.setScore(board, score)
 
@@ -110,6 +113,8 @@ func load_data(done: Callable) -> void:
 
 
 func save_data(data: Dictionary) -> void:
+	if ComboExperiment.is_read_only():
+		return
 	if _yg and available:
 		_yg.saveData(JSON.stringify(data))
 

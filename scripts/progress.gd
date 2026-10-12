@@ -5,6 +5,10 @@ extends Node
 signal changed
 
 const PATH := "user://progress.cfg"
+## Presentation only: keep owned/look in saves even while cosmetics are unavailable.
+const COSMETICS_ENABLED := false
+const BASE_LOOK := 0
+const ComboExperiment = preload("res://scripts/combo_experiment.gd")
 const STAR_CRYSTALS := 5          ## crystals per newly earned star
 ## Price per tile look: crystals, SEASON (free while its season is on) or GIFT (7-day streak).
 const SEASON := -1
@@ -105,6 +109,8 @@ func _ready() -> void:
 func _save() -> void:
 	_dirty = false
 	_since = 0.0
+	if ComboExperiment.is_read_only():
+		return
 	var cfg := ConfigFile.new()
 	cfg.set_value("levels", "stars", stars)
 	cfg.set_value("shop", "crystals", crystals)
@@ -168,6 +174,7 @@ func merge(d: Dictionary) -> void:
 	hint_tokens = maxi(hint_tokens, int(d.get("hint_tokens", 0)))
 	if str(d.get("daily_reward_date", "")) > daily_reward_date:
 		daily_reward_date = str(d.get("daily_reward_date", ""))
+	_bank_cosmetic_pass_rewards()
 	for c in d.get("chapter_claims", []):
 		if not (c in chapter_claims):
 			chapter_claims.append(c)
@@ -340,6 +347,8 @@ static func season_look() -> int:
 
 
 func claim_season() -> bool:
+	if not COSMETICS_ENABLED:
+		return false
 	var s2 := season_look()
 	if s2 < 0 or owns(s2):
 		return false
@@ -402,11 +411,18 @@ func unclaimed() -> int:
 
 # ---------------- tile looks ----------------
 
+## Resolve presentation without overwriting the saved choice.
+func active_look() -> int:
+	return look if COSMETICS_ENABLED else BASE_LOOK
+
+
 func owns(i: int) -> bool:
 	return i in owned
 
 
 func buy(i: int) -> bool:
+	if not COSMETICS_ENABLED:
+		return false
 	if owns(i) or int(LOOK_PRICES[i]) < 0 or crystals < int(LOOK_PRICES[i]):
 		return false
 	crystals -= int(LOOK_PRICES[i])
@@ -417,6 +433,8 @@ func buy(i: int) -> bool:
 
 
 func select(i: int) -> void:
+	if not COSMETICS_ENABLED:
+		return
 	if owns(i):
 		look = i
 		_save()
@@ -431,11 +449,15 @@ static func season_id() -> String:
 
 ## A new month starts a new season: XP and claimed tiers reset, owned rewards stay.
 func _check_season() -> void:
+	# Bank earned cosmetic entitlements even before an old season rolls over.
+	var banked := _bank_cosmetic_pass_rewards()
 	var id := season_id()
 	if season != id:
 		season = id
 		season_xp = 0
 		season_claimed = []
+		_save()
+	elif banked:
 		_save()
 
 
@@ -451,6 +473,21 @@ func add_xp(n: int) -> int:
 	season_xp = mini(season_xp + maxi(n, 0), PASS_TIERS * XP_PER_TIER)
 	_dirty = true
 	return season_tier() - before
+
+
+## Quietly preserve earned new packs while their claim controls are hidden.
+## Duplicate-pack compensation stays manually claimable as the existing 200 crystals.
+func _bank_cosmetic_pass_rewards() -> bool:
+	if COSMETICS_ENABLED:
+		return false
+	var changed_rewards := false
+	for t in range(1, mini(season_xp / XP_PER_TIER, PASS_TIERS) + 1):
+		var reward := pass_reward(t)
+		if reward.kind == "look" and t not in season_claimed and not owns(int(reward.n)):
+			owned.append(int(reward.n))
+			season_claimed.append(t)
+			changed_rewards = true
+	return changed_rewards
 
 
 ## Reward of tier t: {"kind": "crystals"|"hints"|"look", "n": amount or look index}.

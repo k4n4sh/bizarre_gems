@@ -124,6 +124,7 @@ const S := {
 	"gift_title": {"ru": "Ежедневный подарок", "en": "Daily gift", "tr": "Günlük hediye"},
 	"take": {"ru": "Забрать", "en": "Take", "tr": "Al"},
 	"day_n": {"ru": "День {n}", "en": "Day {n}", "tr": "Gün {n}"},
+	"gift_daily_crystals": {"ru": "Заходи каждый день и получай кристаллы", "en": "Come back daily to collect crystals", "tr": "Kristal toplamak için her gün gel"},
 	"gift_day7": {"ru": "Заходи каждый день — на 7-й день откроется вид «Золото»", "en": "Come back daily — day 7 unlocks the Gold look", "tr": "Her gün gel — 7. gün Altın görünümü açılır"},
 	"gift_tomorrow": {"ru": "Следующий подарок — завтра", "en": "The next gift comes tomorrow", "tr": "Sonraki hediye yarın"},
 	"gift_got": {"ru": "+{n} кристаллов", "en": "+{n} crystals", "tr": "+{n} kristal"},

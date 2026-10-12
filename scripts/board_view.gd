@@ -4,6 +4,9 @@ extends Control
 
 signal slot_pressed(p: Vector2i)
 
+const SpecialGemArt = preload("res://scripts/special_gem_art.gd")
+const LIGHT_FX := Color("#eed6a0")
+
 const GEM_TEX: Array[Texture2D] = [
 	preload("res://assets/gems/gem_0.png"), preload("res://assets/gems/gem_1.png"),
 	preload("res://assets/gems/gem_2.png"), preload("res://assets/gems/gem_3.png"),
@@ -67,6 +70,8 @@ var _shake := 0.0
 var _hint := Vector2i(-1, -1)
 var _hint_t := 0.0
 var _frame := StyleBoxFlat.new()
+var _run_surface := Color.TRANSPARENT
+var _run_surface_layer: Control
 var _time := 0.0
 var _deal_t := 99.0  ## seconds since the board was dealt; drives the deal-in animation
 var _deal_delay := PackedFloat32Array()
@@ -84,6 +89,13 @@ var skin := "classic":
 	set(v):
 		skin = v
 		_apply_skin()
+## Presentation override; skin still identifies the mode's sizing/input family.
+var visual_profile := "":
+	set(v):
+		visual_profile = v
+		_apply_skin()
+## Match Bright's existing red/blue/green/yellow/orange/purple kind order.
+const RUN_GEM_INDICES := [0, 1, 2, 5, 4, 3]
 var _gem_tex: Array[Texture2D] = GEM_TEX
 ## Bright mode blocks: BLOCKS[palette][kind]; the palette changes on big combos.
 var BLOCKS: Array = []
@@ -91,7 +103,7 @@ var BLOCKS: Array = []
 ## combos. Every look is the same glossy tile style with the same bold shapes.
 var palette := 0:
 	set(v):
-		palette = posmod(v, maxi(BLOCKS.size(), 1))
+		palette = posmod(v, maxi(BLOCKS.size(), 1)) if Progress.COSMETICS_ENABLED else Progress.BASE_LOOK
 		_apply_skin()
 ## tile colour per kind for each look (used for crumbs and confetti), matches gen_assets
 const PALETTE_COLORS := [
@@ -145,6 +157,19 @@ func _ready() -> void:
 	_frame.shadow_size = 18
 	clip_contents = true
 	resized.connect(_relayout)
+	# Bright Run's surface can fade without rebuilding every gem's draw commands.
+	_run_surface_layer = Control.new()
+	_run_surface_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_run_surface_layer.show_behind_parent = true
+	_run_surface_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_run_surface_layer.visible = false
+	add_child(_run_surface_layer)
+	_run_surface_layer.draw.connect(func():
+		if logic == null:
+			return
+		_run_surface_layer.draw_set_transform(_shake_off)
+		var grid_size := Vector2(logic.cols,logic.rows)*cell
+		_run_surface_layer.draw_style_box(_frame,Rect2(origin-Vector2.ONE*frame_pad,grid_size+Vector2.ONE*frame_pad*2)))
 	_fx = Control.new()
 	_fx.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_fx.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -162,12 +187,35 @@ func _ready() -> void:
 	_apply_skin()
 
 
+func _refined() -> bool:
+	return visual_profile == "classic_run"
+
+
+func _trim_refined_fx() -> void:
+	if not _refined():
+		return
+	# Visual budgets only; never throttle strikes, score or game time.
+	if _sparks.size() > 120: _sparks = _sparks.slice(-120)
+	if _shards.size() > 96: _shards = _shards.slice(-96)
+	if _waves.size() > 6: _waves = _waves.slice(-6)
+	if _texts.size() > 8: _texts = _texts.slice(-8)
+	if _praise.size() > 2: _praise = _praise.slice(-2)
+
+
+func _uses_tiles() -> bool:
+	return (visual_profile if visual_profile != "" else skin) == "bright"
+
+
 func _apply_skin() -> void:
-	var bright := skin == "bright"
+	var bright := _uses_tiles()
 	var blocks := bright and not BLOCKS.is_empty()
 	_gem_tex = GEM_TEX
 	if bright:
 		_gem_tex = BLOCKS[palette] if blocks else TILE_TEX
+	if visual_profile == "classic_run":
+		_gem_tex = []
+		for i in RUN_GEM_INDICES:
+			_gem_tex.append(GEM_TEX[i])
 	_slot_tex = SLOT_TILE_TEX if bright else SLOT_TEX
 	_colors = CLASSIC_COLORS
 	if bright:
@@ -177,6 +225,10 @@ func _apply_skin() -> void:
 			for hexc in PALETTE_COLORS[palette]:
 				cols.append(Color(hexc))
 			_colors = cols
+	if visual_profile == "classic_run":
+		_colors = []
+		for i in RUN_GEM_INDICES:
+			_colors.append(CLASSIC_COLORS[i])
 	material = null  # palettes are real colour sets now, no hue rotation
 	if not bright:
 		hue = 0.0
@@ -190,7 +242,27 @@ func _apply_skin() -> void:
 		_frame.border_color = Color(0.82, 0.67, 0.33, 0.55)
 		_frame.set_border_width_all(2)
 		_frame.set_corner_radius_all(14)
+	if _refined() and _run_surface.a > 0.0:
+		_frame.bg_color = _run_surface
 	queue_redraw()
+
+
+## Only the existing translucent surface changes; all gems/slots/effects keep their colours.
+func set_run_surface(color: Color) -> void:
+	_run_surface = color
+	_frame.bg_color = color
+	if not _run_surface_layer.visible:
+		_run_surface_layer.visible = true
+		queue_redraw()
+	_run_surface_layer.queue_redraw()
+
+
+func reset_run_surface() -> void:
+	if _run_surface.a == 0.0:
+		return
+	_run_surface = Color.TRANSPARENT
+	_run_surface_layer.visible = false
+	_apply_skin()
 
 
 func _relayout() -> void:
@@ -272,7 +344,18 @@ func play_knock(from: Vector2i, gone: Array[Vector2i], kinds: Array[int], points
 	for i in gone.size():
 		var h := slot_center(gone[i])
 		_beams.append({"a": c, "b": h, "t": 0.0, "rainbow": rainbow, "w": 1.0 + (mult - 1) * 0.5})
-		if skin != "bright":
+		if _refined():
+			_beams[-1].rainbow = false
+			for j in 4 + mult:
+				var a := randf() * TAU
+				_shards.append({"p":h,"v":Vector2.from_angle(a)*cell*randf_range(1.5,3.5),
+					"r":a,"vr":randf_range(-4,4),"s":cell*randf_range(.055,.11),
+					"c":_col(kinds[i]).lightened(.22),"t":0.0,"life":randf_range(.25,.45)})
+			for j in 2 + mult:
+				_sparks.append({"p":h,"v":Vector2.from_angle(randf()*TAU)*cell*2,
+					"t":0.0,"life":.3,"s":.16,"c":LIGHT_FX})
+			continue
+		if not _uses_tiles():
 			var away := signf(h.x - c.x)
 			if away == 0.0:
 				away = randf_range(-1, 1)
@@ -297,6 +380,7 @@ func play_knock(from: Vector2i, gone: Array[Vector2i], kinds: Array[int], points
 	var col: Color = TEXT_COLORS[clampi(mult, 1, 4) - 1]
 	_texts.append({"p": c, "s": "+%d" % points, "t": 0.0, "c": col, "k": 1.0 + (mult - 1) * 0.18})
 	_hint = Vector2i(-1, -1)
+	_trim_refined_fx()
 	queue_redraw()  # gems were removed
 
 
@@ -304,7 +388,7 @@ func play_knock(from: Vector2i, gone: Array[Vector2i], kinds: Array[int], points
 func play_thaw(ps: Array[Vector2i]) -> void:
 	for q in ps:
 		var h := slot_center(q)
-		for j in 10:
+		for j in (6 if _refined() else 10):
 			var a := randf() * TAU
 			_shards.append({"p": h, "v": Vector2.from_angle(a) * cell * randf_range(2.0, 5.0) + Vector2(0, -cell * 2.0),
 				"r": randf() * TAU, "vr": randf_range(-9, 9), "s": cell * randf_range(0.1, 0.2),
@@ -327,6 +411,8 @@ func play_blast(p: Vector2i) -> void:
 
 ## Expanding ring from a slot; strength 1 for a combo step, 2-3 for precise/perfect.
 func play_wave(at: Vector2i, strength := 1.0, rainbow := false) -> void:
+	if _refined():
+		rainbow = false
 	_waves.append({"p": slot_center(at), "t": 0.0, "k": strength, "rainbow": rainbow})
 	if strength >= 2.0:
 		_waves.append({"p": slot_center(at), "t": -0.12, "k": strength * 0.7, "rainbow": rainbow})
@@ -334,23 +420,28 @@ func play_wave(at: Vector2i, strength := 1.0, rainbow := false) -> void:
 
 ## Firework of sparks over the whole board.
 func play_burst(at: Vector2i, count: int, rainbow := true) -> void:
+	if _refined():
+		count = mini(count, 32)
 	var c := slot_center(at)
 	for i in count:
 		var a := randf() * TAU
 		_sparks.append({"p": c, "v": Vector2.from_angle(a) * cell * randf_range(4, 16), "t": 0.0,
-			"life": randf_range(0.6, 1.2), "s": randf_range(0.35, 0.9), "c": _spark_color(rainbow)})
+			"life": randf_range(0.6, 1.2), "s": randf_range(0.12, 0.3) if _refined() else randf_range(0.35, 0.9), "c": _spark_color(rainbow)})
+	_trim_refined_fx()
 
 
 func flash(color: Color, strength := 0.35) -> void:
 	_flash_color = color
-	_flash = strength
+	_flash = minf(strength, .12) if _refined() else strength
 
 
 func shake(amount := 0.18) -> void:
-	_shake = maxf(_shake, amount)
+	_shake = maxf(_shake, minf(amount, .12) if _refined() else amount)
 
 
 func _spark_color(rainbow: bool) -> Color:
+	if _refined():
+		return [LIGHT_FX, Color("#b9e1df"), Color("#d4c5e8")][randi() % 3]
 	return Color.from_hsv(randf(), 0.55, 1.0) if rainbow else Color(1, 0.95, 0.8)
 
 
@@ -370,6 +461,16 @@ func play_clear_wave() -> void:
 
 ## Confetti raining over the board (bright mode celebrations).
 func play_confetti(count := 60) -> void:
+	if _refined():
+		# Small jewel flecks from the frame instead of paper falling over the board.
+		for i in mini(count / 3, 24):
+			var side := -1.0 if i % 2 == 0 else 1.0
+			var p := Vector2(origin.x if side < 0 else origin.x + logic.cols * cell,
+				origin.y + randf() * logic.rows * cell)
+			_shards.append({"p":p,"v":Vector2(-side*cell*randf_range(.3,1),-cell*randf_range(1,3)),
+				"r":randf()*TAU,"vr":2.0,"s":cell*.08,"c":LIGHT_FX,"t":0.0,"life":.65})
+		_trim_refined_fx()
+		return
 	for i in count:
 		_confetti.append({"p": Vector2(randf_range(0, size.x), randf_range(-size.y * 0.3, 0)),
 			"v": Vector2(randf_range(-40, 40), randf_range(120, 260)), "r": randf() * TAU, "vr": randf_range(-6, 6),
@@ -407,6 +508,7 @@ func mark_dirty() -> void:
 
 
 func _process(delta: float) -> void:
+	_trim_refined_fx()
 	_time += delta
 	if _deal_t < 1.0:
 		_deal_t += delta
@@ -481,7 +583,10 @@ func _draw() -> void:
 	var off := _shake_off
 	draw_set_transform(off)
 	var grid_size := Vector2(logic.cols, logic.rows) * cell
-	draw_style_box(_frame, Rect2(origin - Vector2.ONE * frame_pad, grid_size + Vector2.ONE * frame_pad * 2))
+	if _run_surface_layer.visible:
+		_run_surface_layer.queue_redraw()  # Follow the existing origin, zoom and shake.
+	else:
+		draw_style_box(_frame, Rect2(origin - Vector2.ONE * frame_pad, grid_size + Vector2.ONE * frame_pad * 2))
 
 	var focus := _cursor if _keyboard else _hover
 	if interactive and focus.x >= 0 and logic.is_empty(focus):
@@ -489,11 +594,17 @@ func _draw() -> void:
 		draw_rect(Rect2(origin.x, origin.y + focus.y * cell, grid_size.x, cell), lane)
 		draw_rect(Rect2(origin.x + focus.x * cell, origin.y, cell, grid_size.y), lane)
 
+	if _refined() and logic.in_bounds(focus):
+		var partner := logic.chain[focus.y * logic.cols + focus.x]
+		if partner >= 0:
+			var q := Vector2i(partner % logic.cols, partner / logic.cols)
+			draw_line(slot_center(focus), slot_center(q), Color(LIGHT_FX,.45), 1.5, true)
+			draw_arc(slot_center(q), cell*.46, 0, TAU, 24, LIGHT_FX, 1.5, true)
 	var gem := cell * (0.96 if skin == "bright" else 0.97)
-	var slot := cell * (0.96 if skin == "bright" else 0.84)
+	var slot := cell * (0.96 if _uses_tiles() else 0.84)
 	for y in logic.rows:
 		for x in logic.cols:
-			if skin != "bright" and logic.cells[y * logic.cols + x] >= 0:
+			if not _uses_tiles() and logic.cells[y * logic.cols + x] >= 0:
 				continue  # classic hollows only show where a gem is missing
 			var ctr := origin + (Vector2(x, y) + Vector2(0.5, 0.5)) * cell
 			draw_texture_rect(_slot_tex, Rect2(ctr - Vector2.ONE * slot / 2, Vector2.ONE * slot), false)
@@ -507,20 +618,29 @@ func _draw() -> void:
 			if gs <= 0.5:
 				continue
 			var ctr := origin + (Vector2(x, y) + Vector2(0.5, 0.5)) * cell
-			draw_texture_rect(_tex(k), Rect2(ctr - Vector2.ONE * gs / 2, Vector2.ONE * gs), false)
+			if _refined() and k == BoardLogic.JOKER:
+				SpecialGemArt.joker(self, ctr, gs)
+			else:
+				draw_texture_rect(_tex(k), Rect2(ctr - Vector2.ONE * gs / 2, Vector2.ONE * gs), false)
+			if _refined():
+				SpecialGemArt.overlays(self, ctr, gs, logic.hp[i] >= 2, logic.chain[i] >= 0,
+					logic.ice[i] == 1, logic.bomb[i], logic.cham[i] == 1, number_font)
+				continue
 			if logic.hp.size() > i and logic.hp[i] >= 2:
 				draw_texture_rect(BOX_TEX, Rect2(ctr - Vector2.ONE * gs / 2, Vector2.ONE * gs), false)
 			if logic.chain.size() > i and logic.chain[i] >= 0:
 				var ls := gs * 0.42
 				var lp := ctr + Vector2(gs * 0.5 - ls, -gs * 0.5)
-				draw_texture_rect(LINK_TEX, Rect2(lp, Vector2.ONE * ls), false, Color(0.15, 0.12, 0.3, 0.85))
+				if not _uses_tiles():
+					draw_circle(lp + Vector2.ONE * ls / 2, ls * 0.54, Color(0.02, 0.06, 0.07, 0.9))
+				draw_texture_rect(LINK_TEX, Rect2(lp, Vector2.ONE * ls), false, Color(0.15, 0.12, 0.3, 0.85) if _uses_tiles() else Color("#e5d39b"))
 			if logic.ice.size() > i:
 				if logic.ice[i] == 1:
 					draw_texture_rect(ICE_TEX, Rect2(ctr - Vector2.ONE * gs / 2, Vector2.ONE * gs), false)
 				if logic.cham[i] == 1:
 					draw_texture_rect(CHAM_TEX, Rect2(ctr - Vector2.ONE * gs / 2, Vector2.ONE * gs), false)
 				if logic.bomb[i] > 0:
-					var bs := gs * 0.55
+					var bs := gs * (0.55 if _uses_tiles() else 0.65)
 					var bp := ctr + Vector2(gs * 0.5 - bs * 0.85, -gs * 0.5 - bs * 0.12)
 					draw_texture_rect(BOMB_TEX, Rect2(bp, Vector2.ONE * bs), false)
 					if number_font:
@@ -572,16 +692,17 @@ func _draw_fx() -> void:
 		c.draw_arc(slot_center(_hint), cell * 0.36, 0, TAU, 20, Color(BEAM, a), 2.0)
 	for b in _beams:
 		var a: float = 1.0 - b.t / 0.3
-		var bc := Color.from_hsv(fmod(b.t * 3.0 + b.a.x * 0.002, 1.0), 0.5, 1.0) if b.rainbow else BEAM
-		c.draw_line(b.a, b.b, Color(bc, a * 0.35), (4.0 + 6.0 * a) * b.w)
+		var bc := Color.from_hsv(fmod(b.t * 3.0 + b.a.x * 0.002, 1.0), 0.5, 1.0) if b.rainbow and not _refined() else BEAM
+		c.draw_line(b.a, b.b, Color(bc, a * 0.35), (4.0 + 6.0 * a) * b.w * (.55 if _refined() else 1.0))
 		c.draw_line(b.a, b.b, Color(bc, a), (1.0 + 3.0 * a) * b.w)
 	for w in _waves:
 		if w.t < 0.0:
 			continue
 		var q: float = w.t / 0.6
-		var rad: float = cell * (0.5 + q * 4.5 * w.k)
-		var wc := Color.from_hsv(fmod(q * 2.0, 1.0), 0.45, 1.0) if w.rainbow else BEAM
-		c.draw_arc(w.p, rad, 0, TAU, 40, Color(wc, (1.0 - q) * 0.8), (2.0 + 4.0 * (1.0 - q)) * w.k)
+		var reach: float = minf(4.5 * w.k, 4.0) if _refined() else 4.5 * w.k
+		var rad: float = cell * (0.5 + q * reach)
+		var wc := Color.from_hsv(fmod(q * 2.0, 1.0), 0.45, 1.0) if w.rainbow and not _refined() else BEAM
+		c.draw_arc(w.p, rad, 0, TAU, 40, Color(wc, (1.0 - q) * 0.8), (2.0 + 4.0 * (1.0 - q)) * w.k * (.45 if _refined() else 1.0))
 	for sp in _sparks:
 		var a: float = 1.0 - sp.t / sp.life
 		var sz: float = cell * sp.s * (0.6 + a * 0.6)
@@ -613,6 +734,8 @@ func _draw_fx() -> void:
 			var a: float = 1.0 - t.t / 0.9
 			var pop: float = 1.0 + 0.35 * maxf(0.0, 1.0 - t.t / 0.15)
 			var fs := int(maxf(16.0, cell * 0.75) * t.k * pop)
+			if _refined():
+				fs = mini(fs, int(maxf(18.0, cell * .55)))
 			var p: Vector2 = t.p - Vector2(cell * 2.0, t.t * cell * 1.6 - fs * 0.35)
 			c.draw_string(number_font, p + Vector2(1, 2), t.s, HORIZONTAL_ALIGNMENT_CENTER, cell * 4, fs, Color(0, 0, 0, a * 0.6))
 			c.draw_string(number_font, p, t.s, HORIZONTAL_ALIGNMENT_CENTER, cell * 4, fs, Color(t.c, a))
@@ -622,9 +745,11 @@ func _draw_fx() -> void:
 			var a: float = clampf((1.0 - q) * 2.5, 0.0, 1.0)
 			var pop: float = 1.0 + 0.5 * maxf(0.0, 1.0 - pr.t / 0.12)
 			var fs := int(maxf(26.0, cell * 0.9) * pr.k * pop)
+			if _refined():
+				fs = mini(fs, int(maxf(22.0, cell * .65)))
 			var w := maxf(size.x, cell * 8)
 			var pos: Vector2 = Vector2(clampf(pr.p.x - w / 2, -w / 2 + size.x / 2, size.x / 2 - w / 2), pr.p.y - cell * 0.8 - q * cell * 1.8)
-			c.draw_string_outline(number_font, pos, pr.s, HORIZONTAL_ALIGNMENT_CENTER, w, fs, int(fs * 0.22), Color(0.05, 0.05, 0.15, a))
+			c.draw_string_outline(number_font, pos, pr.s, HORIZONTAL_ALIGNMENT_CENTER, w, fs, 2 if _refined() else int(fs * 0.22), Color(0.05, 0.05, 0.15, a))
 			c.draw_string(number_font, pos, pr.s, HORIZONTAL_ALIGNMENT_CENTER, w, fs, Color(pr.c, a))
 	if _clear_t < 1.6:
 		var cc := Vector2(logic.cols - 1, logic.rows - 1) / 2.0
@@ -635,7 +760,10 @@ func _draw_fx() -> void:
 				var a := 1.0 - absf(_clear_t / 1.0 - d) * 5.0
 				if a > 0.0:
 					var pos := origin + Vector2(x, y) * cell
-					c.draw_rect(Rect2(pos + Vector2.ONE * 2, Vector2.ONE * (cell - 4)), Color(1, 0.95, 0.7, a * 0.7))
+					if _refined():
+						c.draw_arc(pos+Vector2.ONE*cell/2,cell*.4,0,TAU,16,Color(LIGHT_FX,a*.38),1.3,true)
+					else:
+						c.draw_rect(Rect2(pos + Vector2.ONE * 2, Vector2.ONE * (cell - 4)), Color(1, 0.95, 0.7, a * 0.7))
 	for cf in _confetti:
 		var a: float = clampf(4.0 - cf.t, 0.0, 1.0)
 		c.draw_set_transform(cf.p, cf.r, Vector2(1.0, absf(cos(cf.t * 6.0 + cf.ph))))
@@ -644,7 +772,7 @@ func _draw_fx() -> void:
 	if _glow > 0.0:
 		var gs := Vector2(logic.cols, logic.rows) * cell
 		var fr := Rect2(origin - Vector2.ONE * frame_pad, gs + Vector2.ONE * frame_pad * 2)
-		c.draw_rect(fr.grow(2.0), Color(1, 1, 1, _glow * 0.8), false, 4.0 + _glow * 4.0)
+		c.draw_rect(fr.grow(2.0), Color(LIGHT_FX, _glow * .5) if _refined() else Color(1, 1, 1, _glow * 0.8), false, (2.0 if _refined() else 4.0) + _glow * 4.0)
 	if _flash > 0.0:
 		c.draw_set_transform(Vector2.ZERO)
 		var grid_size := Vector2(logic.cols, logic.rows) * cell

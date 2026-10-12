@@ -5,6 +5,7 @@ extends Node
 signal changed
 
 const PATH := "user://save.cfg"
+const ComboExperiment = preload("res://scripts/combo_experiment.gd")
 
 var best := 0          ## classic (desktop) board
 var best_bright := 0  ## bright run
@@ -41,8 +42,10 @@ func _ready() -> void:
 
 ## Merge cloud data once the SDK is up. The higher best score wins.
 func sync_cloud() -> void:
+	if ComboExperiment.is_read_only():
+		return
 	Yandex.load_data(func(d: Dictionary):
-		if d.is_empty():
+		if ComboExperiment.is_read_only() or d.is_empty():
 			return
 		var newer := false
 		if int(d.get("best", 0)) > best:
@@ -60,6 +63,8 @@ func sync_cloud() -> void:
 
 ## Best score of today's daily board. Returns true on a new daily record.
 func submit_daily(score: int, date: String) -> bool:
+	if ComboExperiment.is_read_only():
+		return false
 	if daily_date != date:
 		daily_date = date
 		daily_best = 0
@@ -94,6 +99,8 @@ func cloud_data() -> Dictionary:
 
 
 func submit(score: int, mode := "classic") -> bool:
+	if ComboExperiment.is_read_only():
+		return false
 	if score <= best_for(mode):
 		return false
 	if mode == "levels":
@@ -120,6 +127,8 @@ func _data() -> Dictionary:
 
 
 func _write_local() -> void:
+	if ComboExperiment.is_read_only():
+		return
 	var cfg := ConfigFile.new()
 	cfg.set_value("game", "best", best)
 	cfg.set_value("game", "best_bright", best_bright)
