@@ -21,6 +21,8 @@ func inside(outer: Rect2, inner: Rect2) -> bool:
 	return outer.grow(0.01).encloses(inner)
 
 func inspect_controls(node: Control, safe: Rect2, context: String) -> void:
+	if not node.is_visible_in_tree():
+		return
 	check(inside(safe, node.get_global_rect()), context + " safe bounds: " + str(node.get_path()))
 	check(node.size.y + 0.01 >= node.get_combined_minimum_size().y, context + " content height: " + str(node.get_path()))
 	if node is Label:
@@ -113,6 +115,8 @@ func _run() -> void:
 					check(main.board.size.x == 23 * main.board.cell + 6,context + " exact board width")
 					check(main.time_bar.size.x <= 80 and main.classic_stats.get_child(0).size.x == main.btn_pause.size.x,context + " compact matching content widths")
 					for block in main.classic_stats.get_children():
+						if not block.visible:
+							continue
 						var outer_gap: float = block.global_position.x - safe.position.x
 						var inner_gap: float = main.board.global_position.x - block.get_global_rect().end.x
 						check(absf(outer_gap - inner_gap) <= 1.0,context + " statistics midway between safe edge and board")

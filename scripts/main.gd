@@ -463,6 +463,7 @@ func _wait_run_layout(generation: int) -> void:
 
 ## Mode rules retain their skin discriminator; presentation is resolved separately.
 func _use_mode(id: String) -> void:
+	_reset_bonus_feedback()
 	board.reset_run_surface()
 	match id:
 		"bright":
@@ -477,6 +478,7 @@ func _use_mode(id: String) -> void:
 			mode = BoardLogic.TUTORIAL
 		_:
 			mode = BoardLogic.CLASSIC
+	keeper.classic_bonus_combos = mode.id == "classic" and not daily
 	visual_profile = "classic_run" if mode.id in ["bright", "tutorial"] and not Progress.COSMETICS_ENABLED else mode.skin
 	tut_label.visible = false
 	tut_hand.visible = false
@@ -905,6 +907,7 @@ func pause_game() -> void:
 
 func go_menu() -> void:
 	_report_combo_ab("abandoned")
+	_reset_bonus_feedback()
 	_run_generation += 1
 	_run_starting = false
 	_run_dims = Vector2i.ZERO
@@ -924,6 +927,7 @@ func end_game(reason: String) -> void:
 		return
 	if mode.kind == "run":
 		Progress.report("run_score", score)
+	_reset_bonus_feedback()
 	state = State.OVER
 	end_reason = reason
 	board.interactive = false
@@ -1021,7 +1025,11 @@ func _on_slot(p: Vector2i) -> void:
 		vanish.append(q)
 		kinds.append(before[q.y * logic.cols + q.x])
 	var n := gone.size()
-	var res := keeper.hit(n, play_time, nshine)
+	var vkinds: Array[int] = []
+	for i in gone.size():
+		if gone[i] in vanish:
+			vkinds.append(kinds[i])
+	var res := keeper.hit(n, play_time, nshine, p, vkinds)
 	score = keeper.score
 	_pop(score_label, 1.3)
 	if nshine > 0:
@@ -1036,10 +1044,6 @@ func _on_slot(p: Vector2i) -> void:
 		Sfx.voice("super" if res.mult == 3 else "amazing")
 	# Hits still score when a box only cracks; removal counts use the destroyed gems.
 	cleared += vanish.size()
-	var vkinds: Array[int] = []
-	for i in gone.size():
-		if gone[i] in vanish:
-			vkinds.append(kinds[i])
 	_note_best_strike(p, vanish, vkinds, res)
 	if not thawed.is_empty():
 		board.play_thaw(thawed)
@@ -1115,6 +1119,7 @@ func _on_slot(p: Vector2i) -> void:
 	if palette_event:
 		_set_theme(_next_look())  # A special and a streak threshold on one strike count once.
 	_update_combo_widget(res.tier_up)
+	_show_bonus_feedback(res)
 	if autoplay and (event != "" or res.tier_up):
 		print("[autoplay] combo=%d mult=%d event=%s" % [res.combo, res.mult, event])
 		if event != "":
@@ -1191,6 +1196,7 @@ func _process(delta: float) -> void:
 	play_time += delta
 	if keeper.update(play_time):
 		_combo_break()
+	_update_bonus_progress()
 	if keeper.combo >= 2:
 		combo_bar.value = keeper.window_left(play_time) / keeper.combo_window * 100.0
 	idle += delta
@@ -2049,6 +2055,16 @@ func _build_classic_hud(col: VBoxContainer) -> void:
 	hud_sets["classic"] = {"roots": [hud_classic], "score": c_score, "best": c_best, "time": c_time, "bar": c_bar,
 		"delta": c_delta, "combo_box": c_combo, "combo_style": c_style, "combo_mult": c_mult, "combo_count": c_count,
 		"combo_bar": c_cbar, "pause": c_pause, "restart": c_restart, "settings": c_settings}
+	var bonus_row := HBoxContainer.new()
+	bonus_row.name = "ClassicBonusCombos"
+	bonus_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	bonus_row.add_theme_constant_override("separation", 16)
+	bonus_row.custom_minimum_size.y = 28
+	bonus_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(bonus_row)
+	col.move_child(bonus_row, 1)
+	hud_sets.classic.roots.append(bonus_row)
+	hud_sets.classic.bonus = _build_bonus_widgets(bonus_row, bonus_row, false)
 
 
 ## Android Classic keeps both side rails on every screen; all other HUDs stay intact.
@@ -2148,6 +2164,50 @@ func _build_classic_side_hud(col: VBoxContainer) -> void:
 		"delta": c_delta, "combo_box": c_combo, "combo_style": c_style, "combo_mult": c_mult, "combo_count": c_count,
 		"combo_bar": c_cbar, "pause": c_pause, "restart": c_restart, "settings": c_settings,
 		"captions": {"time": c_time_caption, "score": c_score_caption, "best": c_best_caption}}
+	hud_sets.classic_android.bonus = _build_bonus_widgets(classic_stats, classic_actions, true)
+
+
+## Compact score-only feedback, in the HUD rather than over playable cells.
+func _build_bonus_widgets(progress_parent: BoxContainer, event_parent: BoxContainer, sides: bool) -> Dictionary:
+	var progress := HBoxContainer.new()
+	progress.name = "ColorStreakProgress"
+	progress.alignment = BoxContainer.ALIGNMENT_CENTER
+	progress.add_theme_constant_override("separation", 4)
+	progress.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	progress_parent.add_child(progress)
+	var gem := TextureRect.new()
+	gem.custom_minimum_size = Vector2(18, 18)
+	gem.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	gem.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	gem.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	gem.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	progress.add_child(gem)
+	var count := _label("", f_num, 11 if sides else 14, MUTED)
+	count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	progress.add_child(count)
+	progress.modulate.a = 0.0
+	progress.visible = not sides
+	var events: BoxContainer = VBoxContainer.new() if sides else HBoxContainer.new()
+	events.name = "BonusEvents"
+	events.add_theme_constant_override("separation", 4 if sides else 16)
+	events.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	events.visible = not sides
+	event_parent.add_child(events)
+	var double_hit := _label("DOUBLE HIT!", f_bold, 12 if sides else 14, BRASS_LIGHT)
+	var color_streak := _label("COLOR STREAK!", f_bold, 12 if sides else 14, CREAM)
+	for label in [double_hit, color_streak]:
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if sides:
+			label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			label.custom_minimum_size.y = 34
+		var parent: BoxContainer = progress_parent if sides and label == double_hit else events
+		parent.add_child(label)
+		label.modulate.a = 0.0
+		label.visible = not sides
+	return {"progress": progress, "gem": gem, "count": count, "events": events,
+		"double_hit": double_hit, "color_streak": color_streak}
 
 
 func _set_classic_side_layout(enabled: bool) -> void:
@@ -2193,10 +2253,14 @@ func _layout_classic_sides(view: Vector2, insets: Rect2) -> void:
 		block.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		block.custom_minimum_size.x = content
 		_constrain_side_width(block, content)
-	for button in classic_actions.get_children():
-		button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		button.custom_minimum_size = Vector2.ONE * content
-		button.custom_maximum_size.x = content
+	for block in classic_actions.get_children():
+		block.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		if block is Button:
+			block.custom_minimum_size = Vector2.ONE * content
+			block.custom_maximum_size.x = content
+		else:
+			block.custom_minimum_size.x = content
+			_constrain_side_width(block, content)
 	hud_sets.classic_android.time.add_theme_font_size_override("font_size", 26 if content < 74.0 else 28)
 	_classic_safe_area = insets
 
@@ -3683,6 +3747,7 @@ func _first_button(n: Node) -> Button:
 
 
 func _update_hud() -> void:
+	_update_bonus_progress()
 	var secs := int(ceil(time_left))
 	time_label.text = str(secs)
 	if mode.kind == "zen":
@@ -3735,6 +3800,85 @@ func _toast(text: String) -> void:
 
 
 # ================= combo UI =================
+
+func _update_bonus_progress() -> void:
+	var active: bool = keeper.classic_bonus_combos and mode.id == "classic" and keeper.color_streak_hits >= 2 \
+		and state in [State.PLAYING, State.PAUSED]
+	for id in ["classic", "classic_android"]:
+		if not hud_sets.has(id) or not hud_sets[id].has("bonus"):
+			continue
+		var widgets: Dictionary = hud_sets[id].bonus
+		widgets.progress.modulate.a = 1.0 if active and keeper.color_streak_kind >= 0 else 0.0
+		if id == "classic_android":
+			widgets.progress.visible = active and keeper.color_streak_kind >= 0
+		if keeper.color_streak_kind >= 0 and keeper.color_streak_kind < BoardView.GEM_TEX.size():
+			widgets.gem.texture = BoardView.GEM_TEX[keeper.color_streak_kind]
+		widgets.count.text = ("×%d\n%s" % [keeper.color_streak_hits, L.t("color_streak_chain")]) if active else ""
+
+
+func _show_bonus_feedback(res: Dictionary) -> void:
+	if not keeper.classic_bonus_combos:
+		return
+	for id in ["classic", "classic_android"]:
+		var widgets: Dictionary = hud_sets[id].bonus
+		if int(res.color_streak_points) > 0:
+			# Continuation pulses the count without expanding into the board or repeating a banner.
+			var count: Label = widgets.count
+			var previous_pulse: Tween = count.get_meta("color_chain_tween") if count.has_meta("color_chain_tween") else null
+			if previous_pulse and previous_pulse.is_valid():
+				previous_pulse.kill()
+			count.modulate = Color(1.4, 1.4, 1.4)
+			var pulse := create_tween()
+			pulse.tween_property(count, "modulate", Color.WHITE, 0.2)
+			count.set_meta("color_chain_tween", pulse)
+		for event in ["double_hit", "color_streak"]:
+			if event == "color_streak" and not bool(res.color_streak_started):
+				continue
+			if int(res[event + "_points"]) > 0:
+				var label: Label = widgets[event]
+				var previous: Tween = label.get_meta("bonus_tween") if label.has_meta("bonus_tween") else null
+				if previous and previous.is_valid():
+					previous.kill()
+				label.modulate.a = 1.0
+				label.visible = true
+				if id != "classic_android" or event == "color_streak":
+					widgets.events.visible = true
+				var tw := create_tween()
+				tw.tween_interval(0.8)
+				tw.tween_property(label, "modulate:a", 0.0, 0.25)
+				if id == "classic_android":
+					tw.tween_callback(func():
+						label.visible = false
+						if event == "color_streak":
+							widgets.events.visible = false)
+				label.set_meta("bonus_tween", tw)
+
+
+func _reset_bonus_feedback() -> void:
+	keeper.reset_bonus_combos()
+	for id in ["classic", "classic_android"]:
+		if not hud_sets.has(id) or not hud_sets[id].has("bonus"):
+			continue
+		var widgets: Dictionary = hud_sets[id].bonus
+		widgets.progress.modulate.a = 0.0
+		var count: Label = widgets.count
+		var pulse: Tween = count.get_meta("color_chain_tween") if count.has_meta("color_chain_tween") else null
+		if pulse and pulse.is_valid():
+			pulse.kill()
+		count.modulate = Color.WHITE
+		count.text = ""
+		if id == "classic_android":
+			widgets.progress.visible = false
+			widgets.events.visible = false
+		for event in ["double_hit", "color_streak"]:
+			var label: Label = widgets[event]
+			var previous: Tween = label.get_meta("bonus_tween") if label.has_meta("bonus_tween") else null
+			if previous and previous.is_valid():
+				previous.kill()
+			label.modulate.a = 0.0
+			if id == "classic_android":
+				label.visible = false
+
 
 func _update_combo_widget(pulse := false) -> void:
 	combo_bar.value = keeper.window_left(play_time) / keeper.combo_window * 100.0
@@ -3826,6 +3970,7 @@ func _relayout_board() -> void:
 			board.clear_fx()
 		elif Vector2i(logic.rows, logic.cols) == d:
 			logic.transpose()
+			keeper.transpose_bonus_slot()
 			board.transposed()
 	# a board dealt before the screen turned (Android leaving a sideways classic game) gets
 	# turned to match: a tall screen gets a tall board, a wide one a wide board
@@ -3835,6 +3980,7 @@ func _relayout_board() -> void:
 	if (screen_tall and logic.cols > logic.rows) or (screen_wide and logic.rows > logic.cols):
 		if not (mode.id == "classic" and (not _is_touch_device() or _classic_android_sides())):
 			logic.transpose()
+			keeper.transpose_bonus_slot()
 			board.transposed()
 	board.refresh()
 

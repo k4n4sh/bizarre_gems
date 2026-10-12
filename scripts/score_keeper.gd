@@ -26,6 +26,9 @@ const STREAK_EVERY := 10     ## every this many hits in a row...
 const STREAK_TIME := 3.0     ## ...give this many seconds
 const CLASSIC_TIER_TIME := 1.0
 const CLASSIC_STREAK_TIME := 1.0
+const DOUBLE_HIT_BONUS := 0.5
+const COLOR_STREAK_BONUS := 1.0
+const COLOR_STREAK_MIN_GEMS := 2  ## A color must contribute at least a pair to participate.
 ## combo length -> multiplier (first entry whose length is reached, checked from the top)
 const TIERS := [[9, 4], [5, 3], [2, 2], [0, 1]]
 
@@ -43,6 +46,13 @@ var best_combo := 0
 var precise_streak := 0
 var precise_count := 0  ## Combined events, retained for existing result UI.
 var timed_special := false
+## Explicit rule opt-in, independent of the shared rendering skin and special combo.
+var classic_bonus_combos := false
+var color_streak_kind := BoardLogic.EMPTY
+var color_streak_hits := 0  ## Active chain length; no pending progress is shown.
+## Only unpaid eligible color portions of the immediately previous successful strike.
+var _previous_color_points: Dictionary = {}
+var _double_hit_slot := Vector2i(-1, -1)
 var precise_events := 0
 var perfect_events := 0
 var special_bonus_points := 0
@@ -78,6 +88,7 @@ func reset() -> void:
 	special_bonus_time = 0.0
 	_special_deadline = -1.0
 	_last_hit = -1000.0
+	reset_bonus_combos()
 
 
 ## Seconds left before the combo expires, 0 when there is no combo.
@@ -112,12 +123,63 @@ func miss() -> bool:
 		combo_breaks += 1
 	combo = 0
 	_reset_special()
+	reset_bonus_combos()
 	return had
 
 
+func reset_bonus_combos() -> void:
+	_double_hit_slot = Vector2i(-1, -1)
+	color_streak_kind = BoardLogic.EMPTY
+	color_streak_hits = 0
+	_previous_color_points.clear()
+
+
+## Keep the pending logical slot attached to the same cell when the board turns.
+func transpose_bonus_slot() -> void:
+	_double_hit_slot = Vector2i(_double_hit_slot.y, _double_hit_slot.x)
+
+
+## Each color portion can be rewarded once. Other portions of a mixed strike remain
+## eligible to start a different chain on the next strike, never on a later one.
+func _color_streak_for_hit(ordinary_points: int, removed_kinds: Array[int]) -> Dictionary:
+	var counts := {}
+	for kind in removed_kinds:
+		counts[kind] = int(counts.get(kind, 0)) + 1
+	var current: Dictionary = {}
+	for kind in counts:
+		if int(counts[kind]) >= COLOR_STREAK_MIN_GEMS:
+			current[kind] = ordinary_points * float(counts[kind]) / removed_kinds.size()
+	var reward := 0.0
+	var started := false
+	if color_streak_hits >= 2 and current.has(color_streak_kind):
+		color_streak_hits += 1
+		reward = float(current[color_streak_kind])
+	else:
+		color_streak_kind = BoardLogic.EMPTY
+		color_streak_hits = 0
+		var best := -1.0
+		for kind in current:
+			if not _previous_color_points.has(kind):
+				continue
+			var combined := float(_previous_color_points[kind]) + float(current[kind])
+			if combined > best or (combined == best and int(kind) < color_streak_kind):
+				best = combined
+				color_streak_kind = int(kind)
+		if color_streak_kind != BoardLogic.EMPTY:
+			color_streak_hits = 2
+			reward = best
+			started = true
+	# Exclude the portion paid now from the next pair, even if the active chain ends.
+	current.erase(color_streak_kind)
+	_previous_color_points = current
+	# Preserve fractional shares of both strikes until the one final rounding.
+	return {"points": roundi(reward * COLOR_STREAK_BONUS), "started": started}
+
+
 ## A successful strike that knocked out n gems, `shining` of them shining gems.
-## Returns {points, time, combo, mult, tier_up, event, shine} where event is "", "precise" or "perfect".
-func hit(n: int, now: float, shining := 0) -> Dictionary:
+## Slot and actually removed kinds are required for Classic bonus combos.
+## Bonus points use only ordinary_points, excluding special/shining/other rewards.
+func hit(n: int, now: float, shining := 0, slot := Vector2i(-1, -1), removed_kinds: Array[int] = []) -> Dictionary:
 	update(now)  # Expire both clocks before a hit can refresh or extend them.
 	var old_mult := multiplier_for(combo)
 	combo += 1
@@ -126,7 +188,8 @@ func hit(n: int, now: float, shining := 0) -> Dictionary:
 	var mult := multiplier_for(combo)
 	if mult == 4:
 		hits_at_x4 += 1
-	var points := BoardLogic.points_for(n) * mult
+	var ordinary_points := BoardLogic.points_for(n) * mult
+	var points := ordinary_points
 	var time := float(BoardLogic.bonus_for(n))
 	var event := ""
 	if n >= PRECISE_MIN:
@@ -166,5 +229,25 @@ func hit(n: int, now: float, shining := 0) -> Dictionary:
 		time += streak_time
 	if not time_bonuses:
 		time = float(BoardLogic.bonus_for(n))  # only the basic +1 s / +2 s for 3 / 4 gems
+	var double_hit_points := 0
+	var color_streak_points := 0
+	var color_streak_started := false
+	if classic_bonus_combos:
+		if slot.x >= 0 and slot.y >= 0 and not removed_kinds.is_empty():
+			if slot == _double_hit_slot:
+				# All score bonuses round to nearest integer; positive halves round up.
+				double_hit_points = roundi(ordinary_points * DOUBLE_HIT_BONUS)
+				_double_hit_slot = Vector2i(-1, -1)
+			else:
+				_double_hit_slot = slot
+			var color_reward := _color_streak_for_hit(ordinary_points, removed_kinds)
+			color_streak_points = int(color_reward.points)
+			color_streak_started = bool(color_reward.started)
+		else:
+			reset_bonus_combos()  # No removal cannot prime or earn these bonuses.
+	points += double_hit_points + color_streak_points
 	score += points
-	return {"points": points, "time": time, "combo": combo, "mult": mult, "tier_up": mult > old_mult, "event": event, "shine": shining}
+	return {"points": points, "ordinary_points": ordinary_points, "double_hit_points": double_hit_points,
+		"color_streak_points": color_streak_points, "color_streak_started": color_streak_started,
+		"time": time, "combo": combo, "mult": mult,
+		"tier_up": mult > old_mult, "event": event, "shine": shining}

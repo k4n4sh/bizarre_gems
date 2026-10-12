@@ -70,8 +70,8 @@ func run_suite(main) -> Dictionary:
 		_fixture(main, 4, 2)
 		check(main.time_left - before_time == (10.0 if event == "precise" else 12.0),
 			"real tenth hit: base + " + event + " + streak + two shining gems credited once")
-		check(main.score - before_score == (44 if event == "precise" else 54),
-			"real tenth hit: points and multiplier unchanged for " + event)
+		check(main.score - before_score == (56 if event == "precise" else 78),
+			"real tenth hit: base/special/shine unchanged, +12 color share, +12 Double Hit only in Perfect sequence")
 		check(main.keeper.precise_events == 1 and main.keeper.perfect_events == (0 if event == "precise" else 1),
 			"real tenth hit: no duplicate special event for " + event)
 		main.go_menu()

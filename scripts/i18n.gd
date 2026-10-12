@@ -6,6 +6,7 @@ signal language_changed
 const SUPPORTED := ["ru", "en", "tr"]
 
 const S := {
+	"color_streak_chain": {"ru": "цепь", "en": "chain", "tr": "seri"},
 	"title": {"ru": "Алмазная братва", "en": "Bizarre Gems", "tr": "Bizarre Gems"},
 	"tagline": {"ru": "Выбивай пары камней крестом на время", "en": "Knock out gem pairs with a cross strike, against the clock", "tr": "Taş çiftlerini çapraz vuruşla kır, süreye karşı"},
 	"play": {"ru": "Играть", "en": "Play", "tr": "Oyna"},
