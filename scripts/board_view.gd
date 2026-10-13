@@ -50,7 +50,11 @@ const TEXT_COLORS: Array[Color] = [Color(0.97, 0.89, 0.66), Color(1.0, 0.78, 0.3
 var frame_pad := 10.0
 
 var logic: BoardLogic
-var interactive := false
+var interactive := false:
+	set(v):
+		interactive = v
+		if not v and OS.has_feature("android"):
+			_cancel_android_touch()
 var number_font: Font
 var feedback_font: Font
 var feedback_exclusion: Callable
@@ -128,7 +132,8 @@ const BOMB_TEX := preload("res://assets/tiles/bomb.png")
 const CHAM_TEX := preload("res://assets/tiles/chameleon.png")
 const LINK_TEX := preload("res://assets/ui/icon_link.png")
 var _confetti: Array[Dictionary] = []
-## Pinch zoom (classic on touch screens): 1..3x around the board, pan with one or two fingers.
+## Pinch zoom (classic on touch screens): 1..3x around the board.
+## Android uses one finger to aim; only two fingers can zoom and pan.
 var zoom_enabled := false
 var zoom := 1.0
 var pan := Vector2.ZERO
@@ -138,6 +143,9 @@ var _press_pos := Vector2.ZERO
 var _pressing := false
 var _moved := false
 var _gestured := false
+var _android_touch_id := -1
+var _android_captured := false
+var _android_blocked := false
 var _clear_t := 99.0  ## time since a full clear: a wave of light sweeps over the slots
 const JOKER_TEX := preload("res://assets/tiles/joker.png")
 const BOX_TEX := preload("res://assets/tiles/box.png")
@@ -153,6 +161,7 @@ var hue := 0.0:
 func _ready() -> void:
 	focus_mode = Control.FOCUS_ALL
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	set_process_input(OS.has_feature("android"))
 	_frame.bg_color = Color(0.04, 0.07, 0.2, 0.55)
 	_frame.border_color = Color(1, 1, 1, 0.14)
 	_frame.set_border_width_all(3)
@@ -291,7 +300,10 @@ func _relayout() -> void:
 func reset_zoom() -> void:
 	zoom = 1.0
 	pan = Vector2.ZERO
-	_touches.clear()
+	if OS.has_feature("android"):
+		_cancel_android_touch()
+	else:
+		_touches.clear()
 	_pinch.clear()
 	_relayout()
 
@@ -940,7 +952,90 @@ func _draw_fx() -> void:
 
 # ---------------- input ----------------
 
+## Observe all touch IDs, including a second finger on the HUD. Only _gui_input
+## can start aiming, so touching another Control never starts a board action.
+func _input(event: InputEvent) -> void:
+	if not OS.has_feature("android"):
+		return
+	if event is InputEventScreenTouch:
+		var pos: Vector2 = get_global_transform_with_canvas().affine_inverse() * event.position
+		if event.pressed and not event.canceled:
+			_touches[event.index] = pos
+			if not interactive or not is_visible_in_tree():
+				_cancel_android_touch()
+			elif _touches.size() > 1:
+				_android_blocked = true
+				_android_touch_id = -1
+				_hover = Vector2i(-1, -1)
+				queue_redraw()
+				if _android_captured and zoom_enabled and _touches.size() == 2:
+					_begin_pinch()
+				else:
+					_pinch.clear()
+		else:
+			var commit: bool = _touches.has(event.index) and event.index == _android_touch_id \
+				and not event.canceled and not _android_blocked and interactive and is_visible_in_tree()
+			var selected := _android_slot_at(pos) if commit else Vector2i(-1, -1)
+			_touches.erase(event.index)
+			if event.canceled:
+				_cancel_android_touch()
+			elif _touches.is_empty():
+				_cancel_android_touch()
+			elif _android_captured and zoom_enabled and _touches.size() == 2:
+				_begin_pinch()
+			else:
+				_pinch.clear()
+			# Clear the gesture before emitting: the existing hit handler may pause,
+			# finish or replace the board synchronously. Duplicate releases do nothing.
+			if selected.x >= 0:
+				grab_focus()
+				slot_pressed.emit(selected)
+	elif event is InputEventScreenDrag and _touches.has(event.index):
+		var pos: Vector2 = get_global_transform_with_canvas().affine_inverse() * event.position
+		_touches[event.index] = pos
+		if not interactive or not is_visible_in_tree():
+			_cancel_android_touch()
+		elif _android_captured and zoom_enabled and _touches.size() == 2 and not _pinch.is_empty():
+			_apply_pinch()
+		elif event.index == _android_touch_id and not _android_blocked:
+			_hover = _android_slot_at(pos)
+			queue_redraw()
+
+
+## A zoomed board extends beyond its clipped Control; those hidden cells cannot
+## receive a release over the HUD or outside the visible board area.
+func _android_slot_at(pos: Vector2) -> Vector2i:
+	return slot_at(pos) if Rect2(Vector2.ZERO, size).has_point(pos) else Vector2i(-1, -1)
+
+
+func _cancel_android_touch(forget_touches := false) -> void:
+	if forget_touches:
+		_touches.clear()
+	_android_touch_id = -1
+	_android_captured = false
+	_android_blocked = not _touches.is_empty()
+	_pinch.clear()
+	_hover = Vector2i(-1, -1)
+	queue_redraw()
+
+
 func _gui_input(event: InputEvent) -> void:
+	if OS.has_feature("android"):
+		if event is InputEventMouse and event.device == InputEvent.DEVICE_ID_EMULATION:
+			accept_event()
+			return
+		if event is InputEventScreenTouch or event is InputEventScreenDrag:
+			if event is InputEventScreenTouch and event.pressed and not event.canceled \
+					and interactive and not _android_blocked and _touches.size() == 1:
+				var selected := _android_slot_at(event.position)
+				if selected.x >= 0:
+					_android_touch_id = event.index
+					_android_captured = true
+					_keyboard = false
+					_hover = selected
+					queue_redraw()
+			accept_event()
+			return
 	if zoom_enabled and _zoom_input(event):
 		accept_event()
 		return
@@ -975,6 +1070,13 @@ func _gui_input(event: InputEvent) -> void:
 
 
 func _notification(what: int) -> void:
+	if OS.has_feature("android"):
+		if what in [NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_WM_WINDOW_FOCUS_OUT, NOTIFICATION_EXIT_TREE]:
+			_cancel_android_touch(true)
+		elif what == NOTIFICATION_VISIBILITY_CHANGED and not is_visible_in_tree():
+			_cancel_android_touch()
+		elif what == NOTIFICATION_MOUSE_EXIT and _android_touch_id >= 0:
+			return # Emulated mouse notifications must not overwrite the finger's aim.
 	if what == NOTIFICATION_MOUSE_EXIT:
 		_hover = Vector2i(-1, -1)
 		queue_redraw()
@@ -989,8 +1091,7 @@ func _zoom_input(event: InputEvent) -> bool:
 		else:
 			_touches.erase(event.index)
 		if _touches.size() == 2:
-			var pts: Array = _touches.values()
-			_pinch = {"d": maxf(1.0, (pts[0] - pts[1]).length()), "z": zoom, "mid": (pts[0] + pts[1]) / 2, "pan": pan}
+			_begin_pinch()
 			_gestured = true
 		elif _touches.size() < 2:
 			_pinch.clear()
@@ -998,17 +1099,7 @@ func _zoom_input(event: InputEvent) -> bool:
 	if event is InputEventScreenDrag:
 		_touches[event.index] = event.position
 		if _touches.size() == 2 and not _pinch.is_empty():
-			var pts: Array = _touches.values()
-			var d := maxf(1.0, (pts[0] - pts[1]).length())
-			var mid: Vector2 = (pts[0] + pts[1]) / 2
-			var z := clampf(_pinch.z * d / _pinch.d, 1.0, 3.0)
-			if z < 1.05:
-				z = 1.0
-			# zoom around the pinch midpoint, then follow the fingers
-			var anchor: Vector2 = _pinch.mid - size / 2 - _pinch.pan
-			zoom = z
-			pan = _pinch.pan + anchor * (1.0 - z / _pinch.z) + (mid - _pinch.mid)
-			_relayout()
+			_apply_pinch()
 			return true
 		return false
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
@@ -1034,6 +1125,25 @@ func _zoom_input(event: InputEvent) -> bool:
 			_relayout()
 		return true
 	return false
+
+
+func _begin_pinch() -> void:
+	var pts: Array = _touches.values()
+	_pinch = {"d": maxf(1.0, (pts[0] - pts[1]).length()), "z": zoom, "mid": (pts[0] + pts[1]) / 2, "pan": pan}
+
+
+func _apply_pinch() -> void:
+	var pts: Array = _touches.values()
+	var d := maxf(1.0, (pts[0] - pts[1]).length())
+	var mid: Vector2 = (pts[0] + pts[1]) / 2
+	var z := clampf(_pinch.z * d / _pinch.d, 1.0, 3.0)
+	if z < 1.05:
+		z = 1.0
+	# Keep the existing zoom limits and zoom-around-midpoint/pan calculation.
+	var anchor: Vector2 = _pinch.mid - size / 2 - _pinch.pan
+	zoom = z
+	pan = _pinch.pan + anchor * (1.0 - z / _pinch.z) + (mid - _pinch.mid)
+	_relayout()
 
 
 ## Keep the keyboard cursor on the same slot after a transpose.

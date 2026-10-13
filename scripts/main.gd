@@ -213,6 +213,8 @@ var panel_style: StyleBoxFlat
 var panel_style_compact: StyleBoxFlat
 var dim: ColorRect
 var center: CenterContainer
+var panel_scrolls := {}
+var _panel_generation := 0
 var toast: Label
 var bar_fill: StyleBoxFlat
 var bar_fill_low: StyleBoxFlat
@@ -1967,7 +1969,9 @@ func _build() -> void:
 	ri.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	ri.modulate = BRASS
 	ui.rotate_label = _label("", f_bold, 24, CREAM)
+	ui.rotate_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	ui.rotate_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ui.rotate_content = rv
 	rv.add_child(ri)
 	rv.add_child(ui.rotate_label)
 	rc.add_child(rv)
@@ -2413,10 +2417,21 @@ func _style_run_hud(unified: bool) -> void:
 
 func _panel() -> Array:
 	var p := PanelContainer.new()
+	var scroll := ScrollContainer.new()
+	scroll.follow_focus = true
+	scroll.focus_mode = Control.FOCUS_ALL
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 14)
-	p.add_child(v)
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(v)
+	p.add_child(scroll)
 	center.add_child(p)
+	panel_scrolls[p] = {"scroll": scroll, "content": v}
+	drag_scrolls.append(scroll)
+	v.minimum_size_changed.connect(func():
+		if p.is_visible_in_tree():
+			_fit_panels.call_deferred())
+	p.resized.connect(func(): p.pivot_offset = p.size / 2)
 	return [p, v]
 
 
@@ -3287,6 +3302,7 @@ func _refresh_stats() -> void:
 	for r in rows:
 		var k := _label(L.t(r[0]), f_body, 18, MUTED)
 		k.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		k.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		grid.add_child(k)
 		var val := _label(r[1], f_num, 19, CREAM)
 		val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -3363,6 +3379,8 @@ func _build_rules() -> void:
 		head.add_theme_constant_override("separation", 10)
 		head.add_child(_icon_tex(page_def.icon, 30, BRASS))
 		ui["rp_%d" % pi] = _label("", f_display, 24, BRASS_LIGHT)
+		ui["rp_%d" % pi].autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		ui["rp_%d" % pi].size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		head.add_child(ui["rp_%d" % pi])
 		page.add_child(head)
 		for k in page_def.get("keys", []):
@@ -3465,6 +3483,7 @@ func _set_rules_page(i: int) -> void:
 	rules_page = clampi(i, 0, RULE_PAGES.size() - 1)
 	for pi in ui.rules_pages.size():
 		ui.rules_pages[pi].visible = pi == rules_page
+	(panel_scrolls[rules_panel].scroll as ScrollContainer).scroll_vertical = 0
 	ui.rules_prev.disabled = rules_page == 0
 	ui.rules_next.disabled = rules_page == RULE_PAGES.size() - 1
 	for pi in ui.rules_dots.get_child_count():
@@ -3617,9 +3636,11 @@ func _slider(value: float, on_change: Callable, on_release: Callable) -> HSlider
 	return s
 
 
-func _setting_row(check: CheckButton, slider: HSlider) -> HBoxContainer:
-	var r := HBoxContainer.new()
-	r.add_theme_constant_override("separation", 14)
+func _setting_row(check: CheckButton, slider: HSlider) -> HFlowContainer:
+	var r := HFlowContainer.new()
+	r.add_theme_constant_override("h_separation", 14)
+	r.add_theme_constant_override("v_separation", 6)
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	r.add_child(check)
 	r.add_child(slider)
 	return r
@@ -3769,6 +3790,8 @@ func _pulse_hud_value(label: Control, strength := 1.3) -> void:
 
 
 func _show_panel(p: Control) -> void:
+	_panel_generation += 1
+	var generation := _panel_generation
 	if p == collection_panel and not Progress.COSMETICS_ENABLED:
 		p = menu_panel  # Also closes debug/deep-link routes to the dormant shop.
 	tut_hand.visible = p == null and mode.kind == "tutorial" and tut_step < TUT_MOVES.size()
@@ -3791,6 +3814,14 @@ func _show_panel(p: Control) -> void:
 	btn_pause.disabled = state != State.PLAYING
 	btn_restart.disabled = state != State.PLAYING and state != State.PAUSED
 	if p:
+		var previous: Tween = p.get_meta("panel_tween") if p.has_meta("panel_tween") else null
+		if previous and previous.is_valid():
+			previous.kill()
+		if panel_scrolls.has(p):
+			var scroll: ScrollContainer = panel_scrolls[p].scroll
+			scroll.scroll_vertical = 0
+			scroll.scroll_horizontal = 0
+		_fit_panels()
 		# fade and grow in; the dim layer only fades when it was hidden before
 		if not was_dim:
 			dim.modulate.a = 0.0
@@ -3798,17 +3829,20 @@ func _show_panel(p: Control) -> void:
 		p.modulate.a = 0.0
 		p.scale = Vector2.ONE * 0.94
 		await get_tree().process_frame  # let wrapped text settle so the panel's height is real
-		if not p.visible:
+		if generation != _panel_generation or not p.visible:
 			return
 		_fit_panels()
 		p.pivot_offset = p.size / 2
-		var fit := _panel_fit(p)
-		p.scale = Vector2.ONE * fit * 0.94
+		p.scale = Vector2.ONE * 0.94
 		var tw := create_tween().set_parallel()
+		p.set_meta("panel_tween", tw)
 		tw.tween_property(p, "modulate:a", 1.0, 0.18)
-		tw.tween_property(p, "scale", Vector2.ONE * fit, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tw.tween_property(p, "scale", Vector2.ONE, 0.24).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		var first: Button = ui.get("card_play_" + _menu_mode()) if p == mode_panel else _first_button(p)
-		if first:
+		if panel_scrolls.has(p) and panel_scrolls[p].scroll.get_v_scroll_bar().visible:
+			# Keep the heading/result visible on opening; Tab still reaches the actions.
+			(panel_scrolls[p].scroll as ScrollContainer).grab_focus.call_deferred()
+		elif first:
 			first.grab_focus.call_deferred()
 
 
@@ -4092,6 +4126,7 @@ func _relayout_board() -> void:
 
 func _on_viewport_resized() -> void:
 	var s := get_viewport_rect().size
+	ui.rotate_content.custom_minimum_size.x = minf(620.0, maxf(1.0, s.x - 24.0))
 	var turn := _is_touch_device() and s.x > s.y * 1.05 and not OS.has_feature("android")
 	rotate_overlay.visible = turn
 	if turn:
@@ -4111,11 +4146,6 @@ func _on_viewport_resized() -> void:
 	margin.add_theme_constant_override("margin_bottom", m + int(rounded.size.y))
 	hud.add_theme_constant_override("separation", 10 if compact else 22)
 	combo_box.custom_minimum_size.x = 0 if mode.id == "classic" and not sides else (64 if sides or compact else 96)
-	var w := clampf(s.x - (24 if compact else 40), 260, 620)
-	for p in [pause_panel, over_panel, leaders_panel, settings_panel, rules_panel, level_panel, tasks_panel, collection_panel,
-			gift_panel, ach_panel, pass_panel, stats_panel, confirm_panel]:
-		p.custom_minimum_size.x = w
-		p.add_theme_stylebox_override("panel", panel_style_compact if compact else panel_style)
 	var short := s.y < 600
 	ui.menu_title.add_theme_font_size_override("font_size", 36 if short else (40 if s.x < 600 else 58))
 	ui.mode_title.add_theme_font_size_override("font_size", 24 if s.x < 440 else 32)
@@ -4135,33 +4165,38 @@ func _on_viewport_resized() -> void:
 	_fit_panels.call_deferred()
 
 
-## Scale for a panel that is taller than the screen, so all of it shows (1 when it fits).
-func _panel_fit(p: Control) -> float:
-	if p == menu_panel or p == mode_panel or p == map_panel:
-		return 1.0  # full-screen layouts arrange themselves
-	var avail := get_viewport_rect().size.y - (12.0 if compact else 32.0)
-	var h := p.size.y
-	return clampf(avail / maxf(h, 1.0), 0.5, 1.0)
-
-
-## Shrink the scrolling middle of tall panels so the whole panel fits the screen.
+## Every modal has the same bounded width and readable scale. Its content scrolls
+## when it is too tall; minimum-size changes also cover translations and async lists.
 func _fit_panels() -> void:
-	var avail := get_viewport_rect().size.y - (12.0 if compact else 32.0)
+	var inset := _safe_insets()
+	var gap := 12.0 if compact else 20.0
+	center.offset_left = inset.position.x + gap
+	center.offset_top = inset.position.y + gap
+	center.offset_right = -inset.size.x - gap
+	center.offset_bottom = -inset.size.y - gap
+	var available := get_viewport_rect().size - inset.position - inset.size - Vector2.ONE * gap * 2.0
+	available = available.max(Vector2.ONE)
+	var style := panel_style_compact if compact else panel_style
+	for p in panel_scrolls:
+		p.add_theme_stylebox_override("panel", style)
+		var content: VBoxContainer = panel_scrolls[p].content
+		for child in content.get_children():
+			if child is Label or child is Button:
+				child.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	for pair in [[leaders_panel, ui.leaders_scroll, ui.leaders_list], [pass_panel, ui.pass_scroll, ui.pass_list],
 			[ach_panel, ui.ach_scroll, ui.ach_list]]:
 		var panel: Control = pair[0]
 		var scroll: ScrollContainer = pair[1]
 		var content: Control = pair[2]
-		scroll.custom_minimum_size.y = 0
-		var fixed := panel.get_combined_minimum_size().y
+		var body: VBoxContainer = panel_scrolls[panel].content
+		var fixed := body.get_combined_minimum_size().y - scroll.get_combined_minimum_size().y + style.get_minimum_size().y
 		# wrapped text overstates its minimum height until laid out, so prefer the real height
 		var want := content.size.y if content.size.y > 0.0 else content.get_combined_minimum_size().y
-		scroll.custom_minimum_size.y = clampf(avail - fixed, 80.0, maxf(80.0, want))
-	for p in [pause_panel, over_panel, leaders_panel, settings_panel, rules_panel, level_panel, tasks_panel, collection_panel,
-			gift_panel, ach_panel, pass_panel, stats_panel, confirm_panel]:
-		if p.visible:
-			p.pivot_offset = p.size / 2
-			p.scale = Vector2.ONE * _panel_fit(p)
+		scroll.custom_minimum_size.y = minf(maxf(80.0, available.y - fixed), clampf(want, 80.0, 360.0))
+	for p in panel_scrolls:
+		var content: VBoxContainer = panel_scrolls[p].content
+		var height := content.get_combined_minimum_size().y + style.get_minimum_size().y
+		p.custom_minimum_size = Vector2(minf(620.0, available.x), minf(height, available.y))
 
 
 ## Pick the logical resolution from the kind of device, not from DPI (DPI reports are
