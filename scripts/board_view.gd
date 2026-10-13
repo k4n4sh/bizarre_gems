@@ -76,6 +76,8 @@ var _flash := 0.0
 var _flash_color := Color.WHITE
 var _shake := 0.0
 var _hint := Vector2i(-1, -1)
+## Tutorial-only persistent cross preview; touch players never need to hover.
+var tutorial_focus := Vector2i(-1, -1)
 var _hint_t := 0.0
 var _frame := StyleBoxFlat.new()
 var _run_surface := Color.TRANSPARENT
@@ -347,6 +349,7 @@ func clear_fx() -> void:
 	_shards.clear(); _pops.clear(); _praise.clear(); _confetti.clear()
 	_flash = 0.0
 	_hint = Vector2i(-1, -1)
+	tutorial_focus = Vector2i(-1, -1)
 
 
 func slot_center(p: Vector2i) -> Vector2:
@@ -828,6 +831,12 @@ func _draw_fx() -> void:
 	var off := _shake_off
 	c.draw_set_transform(off)
 	var gem := cell * 0.96
+	if interactive and logic.in_bounds(tutorial_focus) and logic.is_empty(tutorial_focus):
+		var matches := logic.matches_from(tutorial_focus)
+		for first in logic.hits_from(tutorial_focus):
+			var accent := Color(LIGHT_FX, .85) if first in matches else Color(1, .4, .35, .6)
+			c.draw_line(slot_center(tutorial_focus), slot_center(first), Color(accent, .35), 2.0, true)
+			c.draw_arc(slot_center(first), cell * .47, 0, TAU, 28, accent, 2.0, true)
 	# shining gems: no marker, just a sparkle that flares up every second or so
 	for i in logic.shine.size():
 		if logic.shine[i] == 0 or logic.cells[i] < 0:

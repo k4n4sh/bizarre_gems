@@ -286,7 +286,8 @@ func runtime(main) -> void:
 	main.go_menu()
 	check(main.keeper.color_streak_kind == -1 and main.keeper._double_hit_slot.x == -1, "exit clears states")
 	for config in [["bright",false], ["bright",true], ["levels",false], ["zen",false],
-			["puzzle",false], ["tutorial",false], ["classic",true], ["classic",false]]:
+			["puzzle",false], ["classic",true], ["classic",false]]:
+		# Tutorial now validates its own real fixtures in test_tutorial.gd.
 		await main.start_game(config[0], config[1])
 		var active: bool = config == ["classic",false] or config[0] == "bright"
 		check(main.keeper.classic_bonus_combos == active, "mode eligibility " + str(config))

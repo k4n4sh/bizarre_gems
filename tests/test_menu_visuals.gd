@@ -22,6 +22,7 @@ func run_suite(main) -> Dictionary:
 	for path in [save.PATH,progress.PATH]:
 		hashes[path] = FileAccess.get_sha256(path) if FileAccess.file_exists(path) else ""
 	var old_tutorial: bool = progress.tutorial
+	var old_skipped: bool = progress.tutorial_skipped
 	progress.tutorial = true
 	main.ui.btn_home_play.pressed.emit()
 	check(main.mode_panel.visible and not main.menu_panel.visible, "Play opens mode selection")
@@ -44,10 +45,12 @@ func run_suite(main) -> Dictionary:
 	check(main.daily and main.mode.id == "bright" and main.state == main.State.PLAYING, "Daily button preserved")
 	main.go_menu()
 	progress.tutorial = false
+	progress.tutorial_skipped = false
 	main.ui.btn_home_play.pressed.emit()
 	check(main.mode.id == "tutorial" and main.state == main.State.PLAYING, "first-run tutorial routing preserved")
 	main.go_menu()
 	progress.tutorial = old_tutorial
+	progress.tutorial_skipped = old_skipped
 	main._show_panel(main.mode_panel)
 	main.ui.mode_back.pressed.emit()
 	check(main.menu_panel.visible, "mode back button")

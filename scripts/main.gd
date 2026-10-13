@@ -12,6 +12,7 @@ const MENU_MODES := ["classic", "bright"]
 const RUN_HAZARDS_ENABLED := false
 const ComboExperiment = preload("res://scripts/combo_experiment.gd")
 const MenuPreview = preload("res://scripts/menu_preview.gd")
+const TutorialLessons = preload("res://scripts/tutorial_lessons.gd")
 ## Menu-only styling. Gameplay and service-panel themes are intentionally separate.
 const MENU_BRASS := Color("#c6a35c")
 const MENU_TEXT := Color("#f4edda")
@@ -146,6 +147,18 @@ var confirm_panel: PanelContainer
 var pass_panel: PanelContainer
 var stats_panel: PanelContainer
 var tut_step := 0
+var tut_hits := 0
+var tut_waiting := false
+var tut_clock_running := false
+var tut_feedback_key := ""
+var tut_feedback_args := {}
+var tut_last_result := {}
+var tut_card: VBoxContainer
+var tut_layout: Control
+var tut_panel: PanelContainer
+var tut_style: StyleBoxFlat
+var tut_caption: Label
+var tut_next: Button
 var tut_hand: TextureRect
 var tut_label: Label
 var btn_hint: Button
@@ -360,6 +373,12 @@ func start_game(mode_id := "", is_daily := false) -> void:
 	dealing = false
 	board.modulate.a = 1.0
 	daily = is_daily
+	tut_step = 0
+	tut_hits = 0
+	tut_waiting = false
+	tut_clock_running = false
+	tut_feedback_key = ""
+	tut_last_result.clear()
 	_use_mode(mode_id if mode_id != "" else _menu_mode())
 	if mode.kind == "run":
 		var pending_delta: Tween = time_delta.get_meta("delta_tween") if time_delta.has_meta("delta_tween") else null
@@ -438,7 +457,7 @@ func start_game(mode_id := "", is_daily := false) -> void:
 		strikes_max = strikes
 	if mode.kind == "tutorial":
 		hints = 0
-		time_left = 999.0
+		time_left = START_TIME
 	used_continue = false
 	used_shuffle = false
 	paid_crystals = 0
@@ -498,6 +517,7 @@ func _use_mode(id: String) -> void:
 	keeper.classic_bonus_combos = (mode.id == "classic" and not daily) or mode.kind == "run"
 	visual_profile = "classic_run" if mode.id in ["bright", "tutorial"] and not Progress.COSMETICS_ENABLED else mode.skin
 	tut_label.visible = false
+	tut_card.visible = false
 	tut_hand.visible = false
 	board.skin = mode.skin
 	board.visual_profile = visual_profile
@@ -520,10 +540,9 @@ func _use_mode(id: String) -> void:
 ## date seed (plus the wave number), so everyone on the same kind of device gets the same one.
 func _deal_board() -> void:
 	if mode.kind == "tutorial":
-		var tut := PackedInt32Array()
-		for ch in "1.1.2" + "....." + "3.3.2" + "....." + "4..4.":
-			tut.append(-1 if ch == "." else int(ch) - 1)
-		logic.load_cells(5, 5, tut)
+		TutorialLessons.load_board(logic, _tutorial_id(), tut_hits)
+		board_kinds = 6
+		goal_kind = -1
 		return
 	if mode.skin == "bright":
 		# bright: the board for this level, dealt until it opens with the level's number of moves;
@@ -599,7 +618,7 @@ func _next_wave(at: Vector2i, palette_already_changed := false) -> void:
 	var full_clear := logic.gems_left() == 0
 	var bonus_t := WAVE_TIME + (CLEAR_TIME if full_clear else 0.0)
 	var board_time := 0.0
-	if mode.kind == "run":
+	if _run_time_rules():
 		if keeper.update(play_time):
 			_combo_break()
 		keeper.reset_double_hit()
@@ -619,9 +638,10 @@ func _next_wave(at: Vector2i, palette_already_changed := false) -> void:
 		Sfx.voice("clear")
 	elif mode.kind == "zen" or mode.kind == "run":
 		Sfx.voice("levelup")
-		Progress.report("clear_boards")
+		if mode.kind != "tutorial":
+			Progress.report("clear_boards")
 	var bonus_p := CLEAR_POINTS if full_clear else 0
-	if full_clear and mode.kind == "run":
+	if full_clear and _run_time_rules():
 		bonus_p = 100 + 50 * (wave - 1)  # clearing a whole run board is the big score
 	time_left += bonus_t
 	if bonus_p > 0:
@@ -632,7 +652,7 @@ func _next_wave(at: Vector2i, palette_already_changed := false) -> void:
 	if mode.skin == "bright":
 		title = L.t("level_up", {"n": wave}) if mode.kind == "zen" else title
 	var sub := ""
-	if mode.kind == "run":
+	if _run_time_rules():
 		sub = L.t("run_board_time", {"s": int(board_time)})
 		if full_clear:
 			sub += "\n" + L.t("run_full_clear_reward", {"s": int(RUN_FULL_CLEAR_TIME), "p": bonus_p})
@@ -656,7 +676,9 @@ func _next_wave(at: Vector2i, palette_already_changed := false) -> void:
 		_layout_run_header()
 		board.deal_in()
 		dealing = false
-		board.interactive = state == State.PLAYING)
+		board.interactive = state == State.PLAYING
+		if mode.kind == "tutorial":
+			_tutorial_wave_done(full_clear, bonus_t, bonus_p))
 	_update_hud()
 
 
@@ -827,25 +849,158 @@ func _end_puzzle() -> void:
 	Sfx.play("level" if solved else "over")
 
 
-## Guided strikes of the tutorial board, then one free strike.
-const TUT_MOVES := [Vector2i(1, 0), Vector2i(1, 2), Vector2i(4, 1)]
+## The original tutorial entry point/controller, extended with reproducible lessons.
+
+
+func _tutorial_id() -> String:
+	return TutorialLessons.STEPS[clampi(tut_step, 0, TutorialLessons.STEPS.size() - 1)]
+
+
+func _run_time_rules() -> bool:
+	return mode.kind == "run" or (mode.kind == "tutorial" and TutorialLessons.run_rules(_tutorial_id()))
+
+
+func _classic_time_rules() -> bool:
+	return mode.kind in ["classic", "levels"] or (mode.kind == "tutorial" and not _run_time_rules())
 
 
 func _tutorial_target() -> Vector2i:
-	return TUT_MOVES[tut_step] if tut_step < TUT_MOVES.size() else Vector2i(-1, -1)
+	return TutorialLessons.target(_tutorial_id(), tut_hits) if not tut_waiting else Vector2i(-1, -1)
 
 
 func _tutorial_step(i: int) -> void:
 	tut_step = i
-	var keys := ["tut1", "tut2", "tut3", "tut4"]
-	tut_label.text = L.t(keys[mini(i, 3)])
-	tut_label.set_meta("instruction", tut_label.text)
-	tut_label.visible = true
+	tut_hits = 0
+	tut_waiting = false
+	tut_clock_running = false
+	tut_feedback_key = ""
+	tut_feedback_args.clear()
+	tut_last_result.clear()
+	keeper.reset()
+	var run := TutorialLessons.run_rules(_tutorial_id())
+	keeper.configure_combo_rules(not run, run)
+	keeper.configure_time_rewards(not run)
+	keeper.time_bonuses = not run
+	_reset_bonus_feedback()
+	var old_delta: Tween = time_delta.get_meta("delta_tween") if time_delta.has_meta("delta_tween") else null
+	if old_delta and old_delta.is_valid():
+		old_delta.kill()
+	time_delta.modulate.a = 0.0
+	score = 0
+	shown_score = 0.0
+	play_time = 0.0
+	strikes_done = 0
+	cleared = 0
+	best_strike.clear()
+	wave = 1
+	time_left = 1.5 if _tutorial_id() == "clock" else START_TIME
+	idle = 0.0
+	dealing = false
+	board.interactive = state == State.PLAYING
+	_deal_board()
+	board.clear_fx()
+	board.refresh()
+	_tutorial_guidance()
+	_tutorial_render()
+	_update_combo_widget()
+	_update_hud()
+
+
+func _tutorial_guidance(force := false) -> void:
 	var target := _tutorial_target()
-	tut_hand.visible = target.x >= 0
-	if target.x >= 0:
-		board.show_hint(target)
-		_place_hand.call_deferred(target)
+	var guided := target.x >= 0 and (force or tut_step < 3 or _tutorial_id() == "miss")
+	tut_hand.visible = guided and state == State.PLAYING
+	board.tutorial_focus = target if guided else Vector2i(-1, -1)
+	board.show_hint(target if guided else Vector2i(-1, -1))
+	if guided:
+		_place_hand(target)
+
+
+func _tutorial_render() -> void:
+	var id := _tutorial_id()
+	tut_card.visible = mode.kind == "tutorial" and state == State.PLAYING and _current_panel() == null
+	tut_label.visible = true
+	tut_caption.text = "%d/%d · %s" % [tut_step + 1, TutorialLessons.STEPS.size(), L.t("lesson_" + id + "_title")]
+	if not tut_waiting:
+		if id == "special":
+			tut_caption.text += " · " + L.t("lesson_special_progress", {"n": keeper.precise_streak, "s": "%.1f" % keeper.special_window_left(play_time)})
+		elif TutorialLessons.goal(id) > 1:
+			tut_caption.text += " · %d/%d" % [tut_hits, TutorialLessons.goal(id)]
+	var instruction := L.t("lesson_" + id)
+	if tut_clock_running:
+		instruction = L.t("lesson_clock_wait" if id == "clock" else "lesson_timeout_wait")
+	elif id == "chameleon" and tut_hits >= CHAM_EVERY:
+		instruction = L.t("lesson_chameleon_take")
+	tut_label.set_meta("instruction", instruction)
+	tut_label.text = L.t(tut_feedback_key, tut_feedback_args) if tut_feedback_key != "" else instruction
+	if not tut_waiting and tut_feedback_key != "" and tut_feedback_key not in ["lesson_wrong", "lesson_occupied", "lesson_no_match", "lesson_idle"]:
+		tut_label.text += "\n" + (instruction if id == "chameleon" and tut_hits >= CHAM_EVERY else L.t("lesson_continue"))
+	tut_next.visible = tut_waiting
+	combo_box.visible = keeper.combo >= 2
+	if tut_hits == 0 and not tut_waiting and not tut_clock_running and not dealing:
+		time_delta.text = ""
+	tut_next.text = L.t("lesson_finish" if tut_step == TutorialLessons.STEPS.size() - 1 else "next")
+	btn_hint.disabled = tut_waiting or tut_clock_running or dealing
+	btn_hint.tooltip_text = L.t("lesson_help")
+	ui.tut_retry.disabled = dealing
+	ui.tut_skip.text = L.t("lesson_skip")
+	ui.tut_exit.tooltip_text = L.t("menu")
+	ui.tut_retry.tooltip_text = L.t("lesson_retry")
+	tut_panel.visible = tut_card.visible
+	_layout_tutorial.call_deferred()
+
+
+func _tutorial_feedback(key: String, args := {}) -> void:
+	tut_feedback_key = key
+	tut_feedback_args = args
+	_tutorial_render()
+
+
+func _tutorial_help() -> void:
+	if mode.kind != "tutorial" or state != State.PLAYING or tut_waiting or tut_clock_running or dealing:
+		return
+	tut_feedback_key = ""
+	_tutorial_render()
+	if _tutorial_id() == "free":
+		board.show_hint(logic.find_move())
+	else:
+		_tutorial_guidance(true)
+
+
+func _tutorial_next() -> void:
+	if mode.kind != "tutorial" or not tut_waiting or state != State.PLAYING:
+		return
+	if tut_step == TutorialLessons.STEPS.size() - 1:
+		_tutorial_leave(false)
+	else:
+		_tutorial_step(tut_step + 1)
+
+
+func _tutorial_retry() -> void:
+	if mode.kind == "tutorial" and state == State.PLAYING and not dealing:
+		_tutorial_step(tut_step)
+
+
+func _tutorial_leave(skipped: bool) -> void:
+	if mode.kind != "tutorial":
+		return
+	if skipped:
+		Progress.skip_tutorial()
+	go_menu()
+	_show_panel(mode_panel)
+
+
+func _tutorial_done(key := "", args := {}) -> void:
+	tut_waiting = true
+	tut_clock_running = false
+	board.interactive = false
+	tut_hand.visible = false
+	board.tutorial_focus = Vector2i(-1, -1)
+	board.show_hint(Vector2i(-1, -1))
+	_tutorial_feedback(key if key != "" else "lesson_" + _tutorial_id() + "_result", args)
+	if tut_step == TutorialLessons.STEPS.size() - 1:
+		Progress.finish_tutorial()
+		Sfx.play("level")
 
 
 ## The hand follows its slot every frame (see _process), so it stays put while the board lays out.
@@ -858,26 +1013,80 @@ func _update_hand() -> void:
 		return
 	var target: Vector2i = tut_hand.get_meta("target")
 	var pos := board.global_position + board.slot_center(target) - global_position
-	var side := minf(board.cell * 0.42, 56.0)
+	var side := minf(board.cell * 0.34, 48.0)
 	tut_hand.size = Vector2.ONE * side
 	# The reused icon's fingertip is at its top centre; leave the target visible.
-	tut_hand.position = pos + Vector2(-side * 0.5, 1 + 2 * sin(Time.get_ticks_msec() / 1000.0 * 7.0))
+	tut_hand.position = pos + Vector2(-side * 0.5, board.cell * (0.03 + 0.02 * sin(Time.get_ticks_msec() / 1000.0 * 7.0)))
 
 
-func _tutorial_after_strike() -> void:
-	if logic.gems_left() == 0:
-		tut_label.text = L.t("tut_done")
-		tut_hand.visible = false
-		Progress.finish_tutorial()
-		Sfx.play("level")
-		var tw := create_tween()
-		tw.tween_interval(1.6)
-		tw.tween_callback(func():
-			tut_label.visible = false
-			state = State.MENU
-			_show_panel(mode_panel))
-	elif tut_step < 3:
-		_tutorial_step(tut_step + 1)
+func _tutorial_after_strike(result: Dictionary, at: Vector2i) -> void:
+	tut_last_result = result.duplicate(true)
+	var id := _tutorial_id()
+	if id in ["run", "clear"]:
+		if not logic.has_any_move():
+			_next_wave(at)
+		return
+	tut_hits += 1
+	var args := {"p": result.awarded_points, "s": result.awarded_time, "n": result.removed,
+		"m": result.mult, "base": result.ordinary_points, "double": result.double_hit_points,
+		"color": result.color_streak_points, "combo": result.combo}
+	if id == "classic":
+		end_game("stuck")
+	elif tut_hits >= TutorialLessons.goal(id):
+		if id in ["timeout", "clock"]:
+			tut_clock_running = true
+			board.interactive = false
+			tut_feedback_key = ""
+			_tutorial_guidance()
+			_tutorial_render()
+		else:
+			_tutorial_done("", args)
+	else:
+		if id not in ["double", "box"]:
+			_deal_board()
+			board.refresh()
+		_tutorial_guidance()
+		var key := "lesson_receipt"
+		if id == "box":
+			key = "lesson_box_cracked"
+		elif id == "special":
+			key = "lesson_pair_support" if result.removed == 2 else ("lesson_precise_award" if result.event == "precise" else "lesson_receipt")
+		elif id == "chameleon" and tut_hits == CHAM_EVERY:
+			key = "lesson_chameleon_shift"
+		_tutorial_feedback(key, args)
+
+
+func _tutorial_wave_done(full_clear: bool, seconds: float, points: int) -> void:
+	tut_hits += 1
+	var args := {"s": int(seconds), "p": points, "w": wave - 1}
+	if tut_hits >= TutorialLessons.goal(_tutorial_id()):
+		_tutorial_done("lesson_clear_result" if full_clear else "lesson_run_result", args)
+	else:
+		_tutorial_guidance()
+		_tutorial_feedback("lesson_board_receipt", args)
+	_update_hud()
+
+
+## Practice freezes clocks, except for two short, explicit timeout demonstrations.
+func _tutorial_process(delta: float) -> void:
+	if dealing or tut_waiting:
+		return
+	if tut_clock_running:
+		play_time += delta
+		if _tutorial_id() == "clock":
+			time_left = maxf(0.0, time_left - delta)
+		if keeper.update(play_time):
+			_combo_break()
+		if _tutorial_id() == "timeout" and keeper.combo == 0:
+			_tutorial_done()
+		elif _tutorial_id() == "clock" and time_left <= 0.0:
+			end_game("time")
+		combo_bar.value = keeper.window_left(play_time) / keeper.combo_window * 100.0
+		_update_hud()
+	else:
+		idle += delta
+		if idle > HINT_AFTER and tut_feedback_key == "":
+			_tutorial_feedback("lesson_idle")
 
 
 func _today() -> String:
@@ -892,7 +1101,7 @@ func _resume_play() -> void:
 	state = State.PLAYING
 	idle = 0.0
 	last_tick = -1
-	board.interactive = not dealing
+	board.interactive = not dealing and not (mode.kind == "tutorial" and (tut_waiting or tut_clock_running))
 	_show_panel(null)
 	board.grab_focus()
 	Yandex.gameplay(true)
@@ -943,6 +1152,11 @@ func go_menu() -> void:
 	_run_dims = Vector2i.ZERO
 	_daily_transposed = false
 	dealing = false
+	tut_clock_running = false
+	tut_hand.visible = false
+	tut_card.visible = false
+	board.tutorial_focus = Vector2i(-1, -1)
+	board.show_hint(Vector2i(-1, -1))
 	board.modulate.a = 1.0
 	if state == State.PLAYING:
 		Yandex.gameplay(false)
@@ -952,6 +1166,10 @@ func go_menu() -> void:
 
 
 func end_game(reason: String) -> void:
+	if mode.kind == "tutorial":
+		# A practice ending cannot submit scores, grant currency/XP or record games.
+		_tutorial_done("lesson_" + _tutorial_id() + "_result", {"p": score, "s": time_left})
+		return
 	if mode.kind == "levels":
 		_end_level()
 		return
@@ -1011,29 +1229,49 @@ func end_game(reason: String) -> void:
 
 
 func _on_slot(p: Vector2i) -> void:
-	if state != State.PLAYING or dealing or not logic.is_empty(p):
+	if state != State.PLAYING or dealing or not logic.in_bounds(p):
+		return
+	if mode.kind == "tutorial":
+		if tut_waiting or tut_clock_running:
+			return
+		if not logic.is_empty(p):
+			_tutorial_feedback("lesson_occupied")
+			return
+		var target := _tutorial_target()
+		if target.x >= 0 and p != target:
+			_tutorial_feedback("lesson_wrong")
+			return
+		if _tutorial_id() == "free" and logic.matches_from(p).is_empty():
+			board.play_miss(p)
+			_tutorial_feedback("lesson_no_match")
+			return
+		play_time += 0.25  # Controlled practice time; real windows still govern the keeper.
+	elif not logic.is_empty(p):
 		return
 	board.ripple(p)
 	var gone := logic.matches_from(p)
-	if mode.kind == "tutorial" and tut_step < 3 and p != _tutorial_target():
-		# Keep feedback in the guidance row so the last pair remains visible on short phones.
-		tut_label.text = L.t("tut_wrong") + "\n" + str(tut_label.get_meta("instruction"))
-		return
+	var tutorial_score_before := score
+	var tutorial_time_before := time_left
 	if mode.kind == "zen":
 		strikes -= 1 if not gone.is_empty() else 2  # a miss costs two steps
 	elif mode.kind == "puzzle":
 		strikes -= 1
 	if gone.is_empty():
-		if mode.kind == "classic" or mode.kind == "run" or mode.kind == "levels":
+		if _classic_time_rules() or _run_time_rules():
 			time_left = maxf(0.0, time_left - 1.0)
 		board.play_miss(p)
 		Sfx.play("miss")
 		Haptics.buzz("miss")
 		if keeper.miss():
 			_combo_break()
-		if mode.kind == "classic" or mode.kind == "run" or mode.kind == "levels":
+		if _classic_time_rules() or _run_time_rules():
 			_flash_delta("−1", true)
 		_tick_obstacles(false)
+		if mode.kind == "tutorial":
+			tut_last_result = {"points": 0, "time": time_left - tutorial_time_before, "miss": true}
+			_tutorial_done()
+			_update_hud()
+			return
 		if time_left <= 0.0:
 			end_game("time")
 		elif (mode.kind == "zen" or mode.kind == "puzzle") and strikes <= 0:
@@ -1047,7 +1285,7 @@ func _on_slot(p: Vector2i) -> void:
 	for g in gone:
 		kinds.append(logic.kind_at(g))
 	var nshine := logic.shining_count(gone)
-	var joker_color := logic.joker_match_kind(p) if mode.kind == "run" else BoardLogic.EMPTY
+	var joker_color := logic.joker_match_kind(p) if _run_time_rules() else BoardLogic.EMPTY
 	var vanish := logic.vanishing(gone)
 	var before := logic.cells.duplicate()
 	var defused := 0
@@ -1100,7 +1338,7 @@ func _on_slot(p: Vector2i) -> void:
 		keeper.score += extra.size() * 2
 		score = keeper.score
 		board.praise(L.t("chain"), p, Color("#9fe3ff"))
-	if mode.kind == "classic" or mode.kind == "levels":
+	if _classic_time_rules():
 		time_left += res.time  # Run time comes only from completed boards.
 	idle = 0.0
 	var event: String = res.event
@@ -1112,11 +1350,11 @@ func _on_slot(p: Vector2i) -> void:
 		Sfx.play("knock%d" % mini(n, 4), pow(2.0, semi / 12.0))
 	else:
 		Sfx.play("knock%d" % mini(n, 4), 1.0 + mini(res.combo, 12) * 0.025)
-	if not _ab_active:
+	if not _ab_active and mode.kind != "tutorial":
 		Progress.report("gems", vanish.size())
 		if res.tier_up and res.mult == 4:
 			Progress.report("combo4")
-	if res.time > 0 and (mode.kind == "classic" or mode.kind == "levels"):
+	if res.time > 0 and _classic_time_rules():
 		_flash_delta("+%d" % int(res.time), false)
 	if res.tier_up:
 		if mode.skin == "bright":
@@ -1150,7 +1388,7 @@ func _on_slot(p: Vector2i) -> void:
 		board.flash(Color.WHITE, 0.4)
 		board.shake(0.3)
 		_banner(L.t("perfect"), ScoreKeeper.PERFECT_POINTS, ScoreKeeper.PERFECT_TIME if keeper.time_bonuses else 0.0, Color("#ff9ed2"), "", 3)
-		if not _ab_active:
+		if not _ab_active and mode.kind != "tutorial":
 			Progress.report("perfects")
 		if mode.skin == "bright":
 			board.play_confetti(90)
@@ -1171,7 +1409,10 @@ func _on_slot(p: Vector2i) -> void:
 		board.praise(L.t("goal_done"), p, Color("#5cc87a"), 1.2)
 		Sfx.play("bonus")
 	if mode.kind == "tutorial":
-		_tutorial_after_strike()
+		res.awarded_points = score - tutorial_score_before
+		res.awarded_time = time_left - tutorial_time_before
+		res.removed = vanish.size()
+		_tutorial_after_strike(res, p)
 		_update_hud()
 		return
 	if mode.kind == "puzzle":
@@ -1225,6 +1466,9 @@ func _process(delta: float) -> void:
 	_poll_classic_safe_area(delta)
 	_update_hand()
 	if state != State.PLAYING:
+		return
+	if mode.kind == "tutorial":
+		_tutorial_process(delta)
 		return
 	if mode.kind == "run" and dealing:
 		return  # Mandatory field animation freezes every state driven by play_time.
@@ -1288,6 +1532,9 @@ func _auto_move() -> void:
 ## takes the most gems). One free per game or level; more for a rewarded ad on Yandex.
 func _use_hint() -> void:
 	if state != State.PLAYING or dealing:
+		return
+	if mode.kind == "tutorial":
+		_tutorial_help()
 		return
 	if hints > 0:
 		hints -= 1
@@ -1984,18 +2231,65 @@ func _build() -> void:
 	toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(toast)
 
-	# Tutorial guidance reserves its own row above the board, including wrapped text.
-	tut_label = _label("", f_bold, 20, MENU_TEXT)
+	# Tutorial-only composition. The existing board is moved here by _apply_hud.
+	tut_layout = Control.new()
+	tut_layout.name = "TutorialLayout"
+	tut_layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tut_layout.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tut_layout.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tut_layout.visible = false
+	tut_layout.resized.connect(func(): _layout_tutorial.call_deferred())
+	board_column.add_child(tut_layout)
+	board_column.move_child(tut_layout, board.get_index())
+	tut_panel = PanelContainer.new()
+	tut_style = _box(Color(MENU_PANEL, .94), Color(MENU_BRASS, .45), 1, 14, Vector4(16, 16, 16, 16))
+	tut_panel.add_theme_stylebox_override("panel", tut_style)
+	tut_layout.add_child(tut_panel)
+	tut_card = VBoxContainer.new()
+	tut_card.add_theme_constant_override("separation", 10)
+	tut_card.visible = false
+	tut_card.minimum_size_changed.connect(func(): _layout_tutorial.call_deferred())
+	tut_panel.add_child(tut_card)
+	tut_caption = _label("", f_bold, 14, MENU_BRASS)
+	tut_caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tut_caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tut_card.add_child(tut_caption)
+	tut_label = _label("", f_body, 20, MENU_TEXT)
 	tut_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	tut_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	tut_label.add_theme_stylebox_override("normal", _box(Color(MENU_PANEL, .96), Color(MENU_BRASS, .65), 1, 14, Vector4(16, 10, 16, 10)))
-	tut_label.custom_minimum_size.y = 96
-	tut_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	tut_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	tut_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tut_label.visible = false
 	tut_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	board_column.add_child(tut_label)
-	board_column.move_child(tut_label, board.get_index())
+	tut_card.add_child(tut_label)
+	var tut_actions := HBoxContainer.new()
+	tut_actions.add_theme_constant_override("separation", 4)
+	ui.tut_skip = _button("", "", false, func(): _tutorial_leave(true))
+	ui.tut_retry = _icon_button("restart", _tutorial_retry)
+	ui.tut_exit = _icon_button("home", func(): go_menu())
+	for action in [ui.tut_skip, ui.tut_retry, ui.tut_exit]:
+		tut_actions.add_child(action)
+	var tut_spacer := Control.new()
+	tut_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tut_actions.add_child(tut_spacer)
+	tut_next = _button("", "", true, _tutorial_next)
+	tut_actions.add_child(tut_next)
+	tut_card.add_child(tut_actions)
+	for action in [ui.tut_skip, ui.tut_exit, ui.tut_retry, tut_next]:
+		action.custom_minimum_size = Vector2(36, 44)
+		action.add_theme_font_size_override("font_size", 14)
+		action.add_theme_constant_override("icon_max_width", 18)
+		for slot in ["normal", "hover", "pressed", "disabled"]:
+			var style := action.get_theme_stylebox(slot).duplicate() as StyleBoxFlat
+			style.content_margin_left = 6
+			style.content_margin_right = 6
+			style.content_margin_top = 6
+			style.content_margin_bottom = 6
+			if action != tut_next:
+				style.set_border_width_all(0)
+				style.bg_color = Color.TRANSPARENT if slot in ["normal", "disabled"] else Color(MENU_BRASS, .12)
+			action.add_theme_stylebox_override(slot, style)
+	ui.tut_skip.add_theme_font_size_override("font_size", 13)
+	ui.tut_skip.add_theme_color_override("font_color", MENU_MUTED)
 	tut_hand = TextureRect.new()
 	tut_hand.texture = ICONS["hand"]
 	tut_hand.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -2391,7 +2685,8 @@ func _build_bonus_widgets(progress_parent: Control, sides: bool) -> Dictionary:
 func _set_classic_side_layout(enabled: bool) -> void:
 	if not board:
 		return
-	var parent: Control = classic_sides if enabled else board_column
+	var parent: Control = tut_layout if mode.kind == "tutorial" else (classic_sides if enabled else board_column)
+	tut_layout.visible = mode.kind == "tutorial"
 	if board.get_parent() != parent:
 		if not enabled:
 			board.custom_minimum_size.x = 0.0
@@ -2513,8 +2808,10 @@ func _apply_hud(id: String) -> void:
 	btn_restart = set.restart
 	btn_settings = set.settings
 	btn_hint = set.get("hint", hud_balance)
+	btn_hint.disabled = false
+	btn_hint.tooltip_text = ""
 	_set_classic_side_layout(id == "classic_android")
-	board.classic_feedback = mode.id in ["classic", "bright"]
+	board.classic_feedback = mode.id in ["classic", "bright", "tutorial"]
 	_layout_run_header()
 
 
@@ -2522,14 +2819,21 @@ func _apply_hud(id: String) -> void:
 ## This changes paint and typography only; hidden modes retain their original HUD.
 func _style_run_hud(unified: bool) -> void:
 	var run: Dictionary = hud_sets.bright
+	var training: bool = mode.kind == "tutorial"
+	run.best.get_parent().visible = not training
+	if not training:
+		run.combo_box.visible = true
+	for action in [run.pause, run.restart, run.settings, hud_balance]:
+		action.custom_minimum_size = Vector2(44, 44) if training else Vector2(52, 52)
+	ui.run_best_caption.text = L.t("lesson_practice") if mode.kind == "tutorial" else L.t("best")
 	ui.run_score_caption.visible = unified
 	ui.run_best_caption.visible = unified
 	ui.run_time_caption.visible = unified
 	ui.run_crown.visible = not unified
-	hud.custom_minimum_size.y = 93 if unified else 0
-	time_row.custom_minimum_size.y = 35 if unified else 0
+	hud.custom_minimum_size.y = 52 if training else (93 if unified else 0)
+	time_row.custom_minimum_size.y = 24 if training else (35 if unified else 0)
 	run.score.add_theme_font_override("font", f_num if unified else f_display)
-	run.score.add_theme_font_size_override("font_size", 28 if unified else 54)
+	run.score.add_theme_font_size_override("font_size", 24 if training else (28 if unified else 54))
 	run.score.add_theme_constant_override("outline_size", 0 if unified else 10)
 	run.bar.custom_minimum_size.y = 6 if unified else 10
 	run.best.add_theme_color_override("font_color", CREAM if unified else BRASS)
@@ -2645,7 +2949,7 @@ func _build_menu() -> void:
 	v.add_child(gap)
 	ui.btn_home_play = _button("", "play", true, func():
 		Sfx.play("click")
-		if Progress.tutorial:
+		if Progress.tutorial or Progress.tutorial_skipped:
 			_show_panel(mode_panel)
 		else:
 			start_game("tutorial"))
@@ -2783,7 +3087,7 @@ func _build_modes() -> void:
 	ui.mode_scroll = scroll
 	scroll.follow_focus = true
 	ui.mode_cards = []
-	for id in (["levels", "bright", "zen", "puzzle", "classic"] if OS.has_feature("android")
+	for id in (["levels", "classic", "zen", "puzzle", "bright"] if OS.has_feature("android")
 			else ["classic", "levels", "bright", "zen", "puzzle"]):
 		var card := PanelContainer.new()
 		var accent: Color = MENU_BRASS if id in MENU_MODES else BRASS
@@ -3825,7 +4129,7 @@ func _apply_texts() -> void:
 	for key in hud_sets.bright_web.captions:
 		hud_sets.bright_web.captions[key].text = L.t(key)
 	ui.run_score_caption.text = L.t("score")
-	ui.run_best_caption.text = L.t("best")
+	ui.run_best_caption.text = L.t("lesson_practice") if mode.kind == "tutorial" else L.t("best")
 	ui.run_time_caption.text = L.t("time")
 	ui.menu_title.text = L.t("title")
 	ui.menu_tag.text = L.t("tagline")
@@ -3889,6 +4193,8 @@ func _apply_texts() -> void:
 	ui.chk_voice.text = L.t("voice")
 	ui.btn_settings_done.text = L.t("done")
 	ui.rotate_label.text = L.t("rotate")
+	if mode.kind == "tutorial":
+		_tutorial_render()
 	if mode.id in ["classic", "bright"]:
 		_update_combo_widget()
 		_update_bonus_progress()
@@ -3920,7 +4226,9 @@ func _show_panel(p: Control) -> void:
 	var generation := _panel_generation
 	if p == collection_panel and not Progress.COSMETICS_ENABLED:
 		p = menu_panel  # Also closes debug/deep-link routes to the dormant shop.
-	tut_hand.visible = p == null and mode.kind == "tutorial" and tut_step < TUT_MOVES.size()
+	tut_card.visible = p == null and mode.kind == "tutorial" and state == State.PLAYING
+	tut_panel.visible = tut_card.visible
+	tut_hand.visible = tut_card.visible and board.tutorial_focus.x >= 0 and not tut_waiting and not tut_clock_running
 	var was_dim := dim.visible
 	var menu_surface := p == menu_panel or p == mode_panel
 	if menu_surface:
@@ -3993,7 +4301,7 @@ func _update_hud() -> void:
 	elif mode.kind == "puzzle":
 		time_label.text = L.t("moves_left", {"n": maxi(strikes, 0)})
 	elif mode.kind == "tutorial":
-		time_label.text = ""
+		time_label.text = str(secs)
 	var low := state == State.PLAYING and secs <= 15
 	time_label.add_theme_color_override("font_color", DANGER if low else CREAM)
 	time_bar.add_theme_stylebox_override("fill", bar_fill_low if low else bar_fill)
@@ -4001,10 +4309,10 @@ func _update_hud() -> void:
 	if mode.kind == "zen" or mode.kind == "puzzle":
 		time_bar.value = clampf(float(strikes) / strikes_max, 0.0, 1.0) * 100.0
 	elif mode.kind == "tutorial":
-		time_bar.value = 100.0
+		time_bar.value = clampf(time_left / START_TIME, 0.0, 1.0) * 100.0
 	elif mode.kind == "levels":
 		time_bar.value = clampf(time_left / _level_time(level_n), 0.0, 1.0) * 100.0
-	_set_hud_number(best_label, maxi(Save.best_for(mode.id), score))
+	_set_hud_number(best_label, score if mode.kind == "tutorial" else maxi(Save.best_for(mode.id), score))
 	if level_label:
 		level_label.text = "· " + L.t("level_short", {"n": _level()})
 		level_label.visible = mode.kind == "levels" or mode.kind == "zen" or mode.kind == "puzzle"
@@ -4015,10 +4323,13 @@ func _update_hud() -> void:
 	# the hint button shows an ad badge once the free hint and the spare ones are used up
 	btn_hint.icon = ICONS["hint" if hints > 0 or Progress.hint_tokens > 0 else "video"]
 	btn_hint.text = str(Progress.hint_tokens) if hints <= 0 and Progress.hint_tokens > 0 else ""
+	if mode.kind == "tutorial":
+		btn_hint.icon = ICONS["hint"]
+		btn_hint.text = ""
 
 
 func _flash_delta(text: String, negative: bool, unit := "time") -> void:
-	if mode.kind == "run" and time_delta.has_meta("delta_tween"):
+	if mode.kind in ["run", "tutorial"] and time_delta.has_meta("delta_tween"):
 		var previous: Tween = time_delta.get_meta("delta_tween")
 		if previous and previous.is_valid():
 			previous.kill()
@@ -4032,7 +4343,7 @@ func _flash_delta(text: String, negative: bool, unit := "time") -> void:
 	time_delta.add_theme_color_override("font_color", DANGER if negative else BRASS)
 	time_delta.modulate.a = 1.0
 	var tw := create_tween()
-	if mode.kind == "run":
+	if mode.kind in ["run", "tutorial"]:
 		time_delta.set_meta("delta_tween", tw)
 	tw.tween_interval(0.35)
 	tw.tween_property(time_delta, "modulate:a", 0.0, 0.4)
@@ -4101,7 +4412,7 @@ func _reset_bonus_feedback() -> void:
 	keeper.reset_bonus_combos()
 	if board:
 		board.clear_combo_feedback()
-	if banner_box and mode.id in ["classic", "bright"]:
+	if banner_box and mode.id in ["classic", "bright", "tutorial"]:
 		var previous: Tween = banner_box.get_meta("banner_tween") if banner_box.has_meta("banner_tween") else null
 		if previous and previous.is_valid():
 			previous.kill()
@@ -4200,7 +4511,7 @@ func _banner(title: String, pts: int, secs: float, color: Color, sub := "", prio
 	banner_box.set_meta("banner_tween", tw)
 	tw.tween_property(banner_box, "scale", Vector2.ONE * 1.08, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.tween_property(banner_box, "scale", Vector2.ONE, 0.12)
-	var short_special: bool = mode.id in ["classic", "bright"] and priority in [2, 3]
+	var short_special: bool = mode.id in ["classic", "bright", "tutorial"] and priority in [2, 3]
 	tw.tween_interval(SPECIAL_BANNER_SECONDS - 0.55 if short_special else 0.9)
 	if mode.id != "classic" and not short_special:
 		tw.parallel().tween_property(banner_box, "position:y", banner_box.position.y - 30, 1.3)
@@ -4210,7 +4521,7 @@ func _banner(title: String, pts: int, secs: float, color: Color, sub := "", prio
 func _fit_banner_text() -> void:
 	var vs := get_viewport_rect().size
 	banner_title.add_theme_font_size_override("font_size", int(clampf(vs.x / 13.0, 34.0, 64.0)))
-	if mode.id in ["classic", "bright"]:
+	if mode.id in ["classic", "bright", "tutorial"]:
 		var width := maxf(100.0, minf(board.size.x, vs.x) / 1.08 - 36.0)
 		var title_size := banner_title.get_theme_font_size("font_size")
 		var measured := f_display.get_string_size(banner_title.text, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size).x
@@ -4225,6 +4536,43 @@ func _fit_banner_text() -> void:
 
 
 # ================= layout =================
+
+## Only presentation changes here: the same 5x5 board and lesson controls are retained.
+func _tutorial_wide() -> bool:
+	return tut_layout.size.x >= 820.0 and tut_layout.size.x > tut_layout.size.y * 1.25
+
+
+func _layout_tutorial() -> void:
+	if not board or not tut_layout or mode.kind != "tutorial" or not tut_card.visible:
+		return
+	var area := tut_layout.size
+	if area.x < 1.0 or area.y < 1.0:
+		return
+	var wide := _tutorial_wide()
+	var card_width := clampf(area.x * .24, 280.0, 320.0) if wide else minf(area.x, 420.0)
+	var padding := 16.0 if wide else 12.0
+	for side in ["left", "top", "right", "bottom"]:
+		if tut_style.get("content_margin_" + side) != padding:
+			tut_style.set("content_margin_" + side, padding)
+	var separation := 10 if wide else 6
+	if tut_card.get_theme_constant("separation") != separation:
+		tut_card.add_theme_constant_override("separation", separation)
+	tut_panel.size.x = card_width
+	tut_panel.size.y = tut_panel.get_combined_minimum_size().y
+	var gap := 28.0 if wide else 10.0
+	var side := minf(area.y, area.x - card_width - gap) if wide else minf(area.x, area.y - tut_panel.size.y - gap)
+	side = maxf(1.0, floorf(side))
+	board.size = Vector2.ONE * side
+	if wide:
+		var left := floorf((area.x - card_width - gap - side) * .5)
+		tut_panel.position = Vector2(left, floorf((area.y - tut_panel.size.y) * .5))
+		board.position = Vector2(left + card_width + gap, floorf((area.y - side) * .5))
+	else:
+		var top := maxf(0.0, floorf((area.y - tut_panel.size.y - gap - side) * .5))
+		tut_panel.position = Vector2(floorf((area.x - card_width) * .5), top)
+		board.position = Vector2(floorf((area.x - side) * .5), top + tut_panel.size.y + gap)
+	board.refresh()
+	_update_hand()
 
 ## Board shape for the current screen: wide screens get 23x15, tall ones 15x23.
 ## Board shape for the free space under the HUD: tall phones get tall boards, wide screens wide ones.
@@ -4249,6 +4597,10 @@ func _board_area() -> Vector2:
 ## Fit the board to its area. Before a game starts the board is re-dealt in the best shape;
 ## during a game it is only transposed (when that shape fits better) or rescaled.
 func _relayout_board() -> void:
+	if mode.kind == "tutorial":
+		# Tutorial coordinates belong to the exercise, independently of window shape.
+		_layout_tutorial()
+		return
 	if mode.id == "bright" and (_run_starting or _run_dims != Vector2i.ZERO):
 		# Resize the rendering only; never regenerate or transpose an active run.
 		board.refresh()
@@ -4286,6 +4638,7 @@ func _on_viewport_resized() -> void:
 	if turn:
 		pause_game()
 	compact = s.x < 640 or s.y < 600
+	tut_label.add_theme_font_size_override("font_size", 17 if s.x < 400 else (18 if compact else 20))
 	title_label.hide()
 	var sides := _classic_android_sides()
 	var m := 4 if sides else (6 if compact else 16)

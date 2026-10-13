@@ -33,11 +33,27 @@ func _run() -> void:
 		if suite == "test_menu_layouts":
 			test = load("res://tests/test_menu_visuals.gd").new()
 		report = {"layouts":[]}
-		for resolution in [Vector2i(480,860),Vector2i(480,1008),Vector2i(1280,720)]:
-			for language in ["ru","en","tr"]:
-				report.layouts.append(await test.run_layout(main,resolution,language))
+		var resolutions := [Vector2i(480,860),Vector2i(480,1008),Vector2i(1280,720)]
+		var languages := ["ru", "en", "tr"]
+		if suite == "test_tutorial_visuals":
+			resolutions = [Vector2i(360,640),Vector2i(480,854),Vector2i(480,1008),Vector2i(1280,720),Vector2i(960,540)]
+			if "--tutorial-capture" in OS.get_cmdline_user_args():
+				resolutions = [Vector2i(360,640), Vector2i(1280,720)]
+				languages = ["ru"]
+			if "--tutorial-ui-refine" in OS.get_cmdline_user_args():
+				resolutions = [Vector2i(360,640), Vector2i(1274,718), Vector2i(1648,928)]
+		for resolution in resolutions:
+			for language in languages:
+				var layout: Dictionary = await test.run_layout(main,resolution,language)
+				if not layout.has("checks"):
+					report.error = "Layout check returned no results; inspect the runtime error log."
+				report.layouts.append(layout)
+		if suite == "test_tutorial_visuals" and "--tutorial-ui-refine" not in OS.get_cmdline_user_args():
+			report.layouts.append(await test.run_layout(main, Vector2i(480,960), "ru", "", Rect2(12,24,12,32)))
 	else:
 		report = await test.run_suite(main)
+	if report.is_empty():
+		report = {"error": "Suite returned no report; inspect the runtime error log."}
 	var serialized := JSON.stringify(report)
 	var path := OS.get_environment("RUNTIME_TEST_OUTPUT")
 	if not path.is_empty():

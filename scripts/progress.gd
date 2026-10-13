@@ -66,6 +66,7 @@ var gift_date := ""     ## last day the daily gift was opened
 var streak := 0         ## days in a row the gift was opened
 var puzzles := 0        ## puzzles solved (the next one is puzzles + 1)
 var tutorial := false   ## the first-run tutorial was completed
+var tutorial_skipped := false  ## Dismiss first-run guidance without claiming completion.
 ## Local leaderboards (Android and anywhere without Yandex): board -> [{score, date}], best 10.
 var local_scores := {}
 var season := ""            ## season id "YYYY-MM" the XP below belongs to
@@ -95,6 +96,7 @@ func _ready() -> void:
 		streak = int(cfg.get_value("meta", "streak", 0))
 		puzzles = int(cfg.get_value("meta", "puzzles", 0))
 		tutorial = bool(cfg.get_value("meta", "tutorial", false))
+		tutorial_skipped = bool(cfg.get_value("meta", "tutorial_skipped", false))
 		local_scores = cfg.get_value("meta", "local_scores", {})
 		season = str(cfg.get_value("pass", "season", ""))
 		season_xp = int(cfg.get_value("pass", "xp", 0))
@@ -124,6 +126,7 @@ func _save() -> void:
 	cfg.set_value("meta", "streak", streak)
 	cfg.set_value("meta", "puzzles", puzzles)
 	cfg.set_value("meta", "tutorial", tutorial)
+	cfg.set_value("meta", "tutorial_skipped", tutorial_skipped)
 	cfg.set_value("meta", "local_scores", local_scores)
 	cfg.set_value("pass", "season", season)
 	cfg.set_value("pass", "xp", season_xp)
@@ -139,7 +142,7 @@ func _save() -> void:
 ## Everything worth keeping across devices, for the player's Yandex cloud data.
 func to_dict() -> Dictionary:
 	return {"stars": stars, "crystals": crystals, "owned": owned, "look": look, "life": life, "achieved": achieved,
-		"gift_date": gift_date, "streak": streak, "puzzles": puzzles, "tutorial": tutorial, "season": season,
+		"gift_date": gift_date, "streak": streak, "puzzles": puzzles, "tutorial": tutorial, "tutorial_skipped": tutorial_skipped, "season": season,
 		"season_xp": season_xp, "season_claimed": season_claimed, "hint_tokens": hint_tokens,
 		"daily_reward_date": daily_reward_date, "chapter_claims": chapter_claims}
 
@@ -166,6 +169,7 @@ func merge(d: Dictionary) -> void:
 		streak = int(d.get("streak", streak))
 	puzzles = maxi(puzzles, int(d.get("puzzles", 0)))
 	tutorial = tutorial or bool(d.get("tutorial", false))
+	tutorial_skipped = tutorial_skipped or bool(d.get("tutorial_skipped", false))
 	if str(d.get("season", "")) == season:
 		season_xp = maxi(season_xp, int(d.get("season_xp", 0)))
 		for t in d.get("season_claimed", []):
@@ -384,6 +388,12 @@ func local_top(board: String) -> Array:
 
 func finish_tutorial() -> void:
 	tutorial = true
+	tutorial_skipped = false
+	_save()
+
+
+func skip_tutorial() -> void:
+	tutorial_skipped = true
 	_save()
 
 
