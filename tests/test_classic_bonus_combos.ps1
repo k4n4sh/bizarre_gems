@@ -17,6 +17,15 @@ New-Item -ItemType Directory -Force -Path $fixture | Out-Null
 foreach ($folder in @('scripts','scenes','assets','tests')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot $folder) -Destination $fixture -Recurse
 }
+if ($Suites -contains 'test_unified_combos') {
+    # Read-only local baseline for exact Android HUD / field geometry comparisons.
+    $baseline = & git -C $projectRoot show 'e790d9c:scripts/main.gd'
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot read the local HUD baseline.' }
+    [IO.File]::WriteAllText((Join-Path $fixture 'tests/baseline_main.gd'), ($baseline -join "`n"), (New-Object Text.UTF8Encoding($false)))
+    $baselineFixture = Get-Content -LiteralPath (Join-Path $projectRoot 'tests/bright_run_fixture.gd') -Raw
+    $baselineFixture = $baselineFixture.Replace('res://scripts/main.gd', 'res://tests/baseline_main.gd')
+    [IO.File]::WriteAllText((Join-Path $fixture 'tests/baseline_bright_fixture.gd'), $baselineFixture, (New-Object Text.UTF8Encoding($false)))
+}
 Copy-Item -LiteralPath (Join-Path $projectRoot 'icon.png') -Destination $fixture
 $config = Get-Content -LiteralPath (Join-Path $projectRoot 'project.godot') -Raw
 $config = $config -replace '(?m)^_mcp_game_helper=.*\r?\n', ''

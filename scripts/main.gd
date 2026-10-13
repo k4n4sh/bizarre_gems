@@ -30,6 +30,12 @@ const HINT_AFTER := 15.0
 const WAVE_TIME := 5.0      ## bonus seconds when a fresh board is dealt
 const CLEAR_POINTS := 25    ## bonus for knocking out every gem on a board
 const CLEAR_TIME := 5.0
+## Rewards are indexed by the completed board, with the last value repeated.
+const RUN_BOARD_TIME := [40.0, 30.0, 20.0, 10.0]
+const RUN_FULL_CLEAR_TIME := 20.0
+const SPECIAL_BANNER_SECONDS := 0.75  ## 0.30 appearance + 0.20 hold + 0.25 fade.
+const RUN_HUD_GAP := 16.0
+const RUN_HUD_HEIGHT := 64.0
 
 const BRASS := Color("#ffc83d")        ## accent: gold
 const BRASS_LIGHT := Color("#ffe9a3")
@@ -355,13 +361,18 @@ func start_game(mode_id := "", is_daily := false) -> void:
 	board.modulate.a = 1.0
 	daily = is_daily
 	_use_mode(mode_id if mode_id != "" else _menu_mode())
+	if mode.kind == "run":
+		var pending_delta: Tween = time_delta.get_meta("delta_tween") if time_delta.has_meta("delta_tween") else null
+		if pending_delta and pending_delta.is_valid():
+			pending_delta.kill()
+		time_delta.modulate.a = 0.0
 	var classic: bool = mode.id == "classic" and not daily
 	if classic:
 		ComboExperiment.begin_classic()
 	_ab_active = classic and ComboExperiment.is_read_only()
 	keeper.configure_time_rewards(classic and not _ab_active)
-	keeper.timed_special = classic and ComboExperiment.special_rules == "timed"
-	keeper.combo_window = ComboExperiment.window_seconds() if classic else ScoreKeeper.COMBO_WINDOW
+	keeper.configure_combo_rules(classic, mode.kind == "run", ComboExperiment.window_seconds(),
+		ComboExperiment.special_rules == "timed")
 	if not ComboExperiment.is_read_only() and Save.mode != mode.id and mode.id in ["classic", "bright", "zen", "levels", "puzzle"]:
 		Save.mode = mode.id  # the tutorial and the daily challenge don't become "last mode"
 		Save.store()
@@ -436,6 +447,7 @@ func start_game(mode_id := "", is_daily := false) -> void:
 	best_strike = {}
 	board.clear_fx()
 	board.refresh()
+	_layout_run_header()
 	board.deal_in()
 	ambient.pulse(BRASS, 0.6)
 	Sfx.play("start")
@@ -483,7 +495,7 @@ func _use_mode(id: String) -> void:
 			mode = BoardLogic.TUTORIAL
 		_:
 			mode = BoardLogic.CLASSIC
-	keeper.classic_bonus_combos = mode.id == "classic" and not daily
+	keeper.classic_bonus_combos = (mode.id == "classic" and not daily) or mode.kind == "run"
 	visual_profile = "classic_run" if mode.id in ["bright", "tutorial"] and not Progress.COSMETICS_ENABLED else mode.skin
 	tut_label.visible = false
 	tut_hand.visible = false
@@ -496,8 +508,8 @@ func _use_mode(id: String) -> void:
 	Sfx.set_skin(mode.skin)
 	Sfx.update_music()
 	if hud_sets.has(mode.skin):
-		_apply_hud(mode.skin)
 		_style_run_hud(mode.id in ["bright", "tutorial"])
+		_apply_hud("bright_web" if _bright_web_hud() else mode.skin)
 		_update_combo_widget()
 	_update_hud()
 	if is_inside_tree() and margin:
@@ -580,10 +592,19 @@ func _deal_board() -> void:
 
 ## A board ran out of moves: deal the next one with a time bonus, the game goes on.
 func _next_wave(at: Vector2i, palette_already_changed := false) -> void:
+	if dealing or state != State.PLAYING:
+		return  # One award and one pending deal per completed board.
+	dealing = true
+	board.interactive = false
 	var full_clear := logic.gems_left() == 0
 	var bonus_t := WAVE_TIME + (CLEAR_TIME if full_clear else 0.0)
+	var board_time := 0.0
 	if mode.kind == "run":
-		bonus_t = 10.0  # every new run board, stuck or cleared, adds 10 s; a full clear also scores
+		if keeper.update(play_time):
+			_combo_break()
+		keeper.reset_double_hit()
+		board_time = RUN_BOARD_TIME[clampi(wave - 1, 0, RUN_BOARD_TIME.size() - 1)]
+		bonus_t = board_time + (RUN_FULL_CLEAR_TIME if full_clear else 0.0)
 	if mode.kind == "zen":
 		bonus_t = 0.0
 		var nl := BoardLogic.bright_level(wave + 1)
@@ -607,12 +628,14 @@ func _next_wave(at: Vector2i, palette_already_changed := false) -> void:
 		keeper.score += bonus_p
 		score = keeper.score
 	wave += 1
-	dealing = true
-	board.interactive = false
 	var title := L.t("clear_board" if full_clear else "new_board")
 	if mode.skin == "bright":
 		title = L.t("level_up", {"n": wave}) if mode.kind == "zen" else title
 	var sub := ""
+	if mode.kind == "run":
+		sub = L.t("run_board_time", {"s": int(board_time)})
+		if full_clear:
+			sub += "\n" + L.t("run_full_clear_reward", {"s": int(RUN_FULL_CLEAR_TIME), "p": bonus_p})
 	_banner(title, bonus_p, bonus_t, BRASS_LIGHT, sub)
 	if bonus_t > 0.0:
 		_flash_delta("+%d" % int(bonus_t), false)
@@ -630,9 +653,11 @@ func _next_wave(at: Vector2i, palette_already_changed := false) -> void:
 		_deal_board()
 		board.clear_fx()
 		board.refresh()
+		_layout_run_header()
 		board.deal_in()
 		dealing = false
 		board.interactive = state == State.PLAYING)
+	_update_hud()
 
 
 ## The look after the current one: the six base looks in turn; a special look (seasonal or
@@ -691,7 +716,7 @@ func _set_orientation(landscape: bool) -> void:
 		else DisplayServer.SCREEN_SENSOR_PORTRAIT)
 
 
-## Bright mode: the clock runs faster on every level (+12% per level, at most x2.2).
+## All active timed modes use normal game seconds.
 func _time_speed() -> float:
 	return 1.0  # the clock runs at normal speed everywhere now
 
@@ -867,7 +892,7 @@ func _resume_play() -> void:
 	state = State.PLAYING
 	idle = 0.0
 	last_tick = -1
-	board.interactive = true
+	board.interactive = not dealing
 	_show_panel(null)
 	board.grab_focus()
 	Yandex.gameplay(true)
@@ -932,7 +957,12 @@ func end_game(reason: String) -> void:
 		return
 	if mode.kind == "run":
 		Progress.report("run_score", score)
-	_reset_bonus_feedback()
+	# OVER stops play_time. Keep eligible Run continuations on the very same keeper.
+	if mode.kind == "run" and reason == "time" and not used_continue:
+		if keeper.update(play_time):
+			_combo_break()  # Never preserve a series that had already expired.
+	else:
+		_reset_bonus_feedback()
 	state = State.OVER
 	end_reason = reason
 	board.interactive = false
@@ -1017,6 +1047,7 @@ func _on_slot(p: Vector2i) -> void:
 	for g in gone:
 		kinds.append(logic.kind_at(g))
 	var nshine := logic.shining_count(gone)
+	var joker_color := logic.joker_match_kind(p) if mode.kind == "run" else BoardLogic.EMPTY
 	var vanish := logic.vanishing(gone)
 	var before := logic.cells.duplicate()
 	var defused := 0
@@ -1034,7 +1065,12 @@ func _on_slot(p: Vector2i) -> void:
 	for i in gone.size():
 		if gone[i] in vanish:
 			vkinds.append(kinds[i])
-	var res := keeper.hit(n, play_time, nshine, p, vkinds)
+	var color_kinds: Array[int] = vkinds.duplicate()
+	if joker_color >= 0:
+		for i in color_kinds.size():
+			if color_kinds[i] == BoardLogic.JOKER:
+				color_kinds[i] = joker_color
+	var res := keeper.hit(n, play_time, nshine, p, color_kinds)
 	score = keeper.score
 	_pop(score_label, 1.3)
 	if nshine > 0:
@@ -1065,7 +1101,7 @@ func _on_slot(p: Vector2i) -> void:
 		score = keeper.score
 		board.praise(L.t("chain"), p, Color("#9fe3ff"))
 	if mode.kind == "classic" or mode.kind == "levels":
-		time_left += res.time  # the bright run earns time only by clearing a whole board
+		time_left += res.time  # Run time comes only from completed boards.
 	idle = 0.0
 	var event: String = res.event
 	board.play_knock(p, vanish, vkinds, res.points, res.mult, event != "")
@@ -1098,7 +1134,7 @@ func _on_slot(p: Vector2i) -> void:
 		board.play_wave(p, 2.0, true)
 		board.play_burst(p, 40)
 		board.flash(BRASS_LIGHT, 0.22)
-		_banner(L.t("precise"), ScoreKeeper.PRECISE_POINTS, ScoreKeeper.PRECISE_TIME, BRASS_LIGHT, "", 2)
+		_banner(L.t("precise"), ScoreKeeper.PRECISE_POINTS, ScoreKeeper.PRECISE_TIME if keeper.time_bonuses else 0.0, BRASS_LIGHT, "", 2)
 		if mode.skin == "bright":
 			board.play_confetti(50)
 		if mode.id != "bright" or daily:
@@ -1113,7 +1149,7 @@ func _on_slot(p: Vector2i) -> void:
 		board.play_burst(p, 90)
 		board.flash(Color.WHITE, 0.4)
 		board.shake(0.3)
-		_banner(L.t("perfect"), ScoreKeeper.PERFECT_POINTS, ScoreKeeper.PERFECT_TIME, Color("#ff9ed2"), "", 3)
+		_banner(L.t("perfect"), ScoreKeeper.PERFECT_POINTS, ScoreKeeper.PERFECT_TIME if keeper.time_bonuses else 0.0, Color("#ff9ed2"), "", 3)
 		if not _ab_active:
 			Progress.report("perfects")
 		if mode.skin == "bright":
@@ -1190,23 +1226,29 @@ func _process(delta: float) -> void:
 	_update_hand()
 	if state != State.PLAYING:
 		return
+	if mode.kind == "run" and dealing:
+		return  # Mandatory field animation freezes every state driven by play_time.
+	var game_delta := minf(delta, maxf(time_left, 0.0)) if mode.kind == "run" else delta
 	if mode.kind == "classic" or mode.kind == "run" or mode.kind == "levels":
-		time_left -= delta * _time_speed()
-	_stuck_t += delta
+		time_left -= game_delta * _time_speed()
+	if mode.kind == "run":
+		play_time += game_delta
+	_stuck_t += game_delta
 	if _stuck_t > 0.5:
 		_stuck_t = 0.0
 		_check_no_moves()
-		if state != State.PLAYING:
+		if state != State.PLAYING or (mode.kind == "run" and dealing):
 			return
-	play_time += delta
+	if mode.kind != "run":
+		play_time += game_delta
 	if keeper.update(play_time):
 		_combo_break()
 	_update_bonus_progress()
 	if keeper.combo >= 2:
 		combo_bar.value = keeper.window_left(play_time) / keeper.combo_window * 100.0
-	idle += delta
+	idle += game_delta
 	if autoplay:
-		_auto_t += delta
+		_auto_t += game_delta
 		if _auto_t > 0.45:
 			_auto_t = 0.0
 			_auto_move()
@@ -1373,7 +1415,12 @@ func _ask_leave() -> void:
 
 func _on_continue() -> void:
 	Sfx.play("click")
+	var generation := _run_generation
+	var run_continuation: bool = mode.kind == "run"
 	Yandex.show_rewarded(func(ok: bool):
+		if run_continuation and (generation != _run_generation or state != State.OVER \
+				or end_reason != "time" or used_continue):
+			return
 		if not ok:
 			_toast(L.t("ad_failed"))
 			return
@@ -1767,6 +1814,7 @@ func _build() -> void:
 	var col := VBoxContainer.new()
 	board_column = col
 	col.add_theme_constant_override("separation", 10)
+	col.sort_children.connect(func(): _layout_run_header.call_deferred())
 	margin.add_child(col)
 
 	# ---- HUD: pause | big score with best under it | settings, then the timer bar ----
@@ -1857,7 +1905,12 @@ func _build() -> void:
 	combo_bar.custom_minimum_size = Vector2(80, 4)
 	combo_count.visible = false
 	cv.add_child(combo_mult)
-	cv.add_child(combo_count)
+	# Caption overlays the existing gap: its text cannot resize Android's timer row.
+	var count_slot := _stable_hud_slot(combo_count)
+	combo_mult.add_child(count_slot)
+	count_slot.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	count_slot.offset_top = -17.0
+	count_slot.offset_bottom = 0.0
 	cv.add_child(combo_bar)
 	combo_box.add_child(cv)
 	combo_box.modulate.a = 0.0
@@ -1872,6 +1925,7 @@ func _build() -> void:
 		"combo_count": combo_count, "combo_bar": combo_bar, "pause": btn_pause, "restart": btn_restart, "settings": btn_settings}
 	_build_classic_hud(col)
 	_build_classic_side_hud(col)
+	_build_classic_hud(col, "bright_web")
 
 	# ---- board ----
 	board = BoardView.new()
@@ -1992,26 +2046,30 @@ func _stable_hud_slot(content: Control, minimum := Vector2.ZERO) -> Control:
 
 
 ## Classic has a single stable row, including the compact chain counter.
-func _build_classic_hud(col: VBoxContainer) -> void:
+func _build_classic_hud(col: VBoxContainer, hud_id := "classic") -> void:
 	# Reserve only the row's height; its contents cannot resize the board column.
 	var header := Control.new()
 	header.custom_minimum_size.y = 64
 	header.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_child(header)
 	col.move_child(header, 0)
-	hud_classic = HBoxContainer.new()
-	header.add_child(hud_classic)
-	title_label = _label("", f_display, 30, BRASS)
-	title_label.hide()
-	header.add_child(title_label)
+	var row := HBoxContainer.new()
+	if hud_id == "classic":
+		hud_classic = row
+	header.add_child(row)
+	var heading := _label("", f_display, 30, BRASS)
+	heading.hide()
+	header.add_child(heading)
+	if hud_id == "classic":
+		title_label = heading
 
 	var tbox := VBoxContainer.new()
 	tbox.add_theme_constant_override("separation", 3)
 	tbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tbox.size_flags_stretch_ratio = 2.0
-	tbox.custom_minimum_size.x = 104
-	time_caption = _caption("")
-	time_caption.add_theme_font_size_override("font_size", 12)
+	tbox.custom_minimum_size.x = 0 if hud_id == "bright_web" else 104
+	var c_time_caption := _caption("")
+	c_time_caption.add_theme_font_size_override("font_size", 12)
 	var tr := HBoxContainer.new()
 	tr.add_theme_constant_override("separation", 10)
 	var c_time := _label("120", f_num, 28)
@@ -2021,42 +2079,42 @@ func _build_classic_hud(col: VBoxContainer) -> void:
 	# Transient time rewards are an overlay, never part of the row's minimum width.
 	var delta_slot := _stable_hud_slot(c_delta)
 	c_time.add_child(delta_slot)
-	delta_slot.position = Vector2(55, 6)
+	delta_slot.position = Vector2(0, 38) if hud_id == "bright_web" else Vector2(55, 6)
 	delta_slot.size = Vector2(49, 28)
 	var c_bar := ProgressBar.new()
 	c_bar.show_percentage = false
 	c_bar.custom_minimum_size.y = 4
 	c_bar.max_value = 100
-	tbox.add_child(time_caption)
+	tbox.add_child(c_time_caption)
 	tbox.add_child(tr)
 	tbox.add_child(c_bar)
 	var time_slot := _stable_hud_slot(tbox, Vector2(112, 64))
-	hud_classic.add_child(time_slot)
+	row.add_child(time_slot)
 
 	var sbox := VBoxContainer.new()
 	sbox.add_theme_constant_override("separation", 3)
-	score_caption = _caption("")
-	score_caption.add_theme_font_size_override("font_size", 12)
+	var c_score_caption := _caption("")
+	c_score_caption.add_theme_font_size_override("font_size", 12)
 	var c_score := _label("0", f_num, 28)
-	sbox.add_child(score_caption)
+	sbox.add_child(c_score_caption)
 	sbox.add_child(c_score)
 	var score_space := Control.new()
 	score_space.custom_minimum_size.y = 4
 	sbox.add_child(score_space)
 	var score_slot := _stable_hud_slot(sbox, Vector2(100, 64))
-	hud_classic.add_child(score_slot)
+	row.add_child(score_slot)
 	var bbox := VBoxContainer.new()
 	bbox.add_theme_constant_override("separation", 3)
-	best_caption = _caption("")
-	best_caption.add_theme_font_size_override("font_size", 12)
+	var c_best_caption := _caption("")
+	c_best_caption.add_theme_font_size_override("font_size", 12)
 	var c_best := _label("0", f_num, 28)
-	bbox.add_child(best_caption)
+	bbox.add_child(c_best_caption)
 	bbox.add_child(c_best)
 	var best_space := Control.new()
 	best_space.custom_minimum_size.y = 4
 	bbox.add_child(best_space)
 	var best_slot := _stable_hud_slot(bbox, Vector2(100, 64))
-	hud_classic.add_child(best_slot)
+	row.add_child(best_slot)
 
 	var c_combo := PanelContainer.new()
 	var c_style := _box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0, Vector4.ZERO)
@@ -2076,7 +2134,7 @@ func _build_classic_hud(col: VBoxContainer) -> void:
 	c_combo.add_child(ccv)
 	c_combo.modulate.a = 0.0
 	var combo_slot := _stable_hud_slot(c_combo, Vector2(64, 64))
-	hud_classic.add_child(combo_slot)
+	row.add_child(combo_slot)
 
 	var btns := HBoxContainer.new()
 	btns.add_theme_constant_override("separation", 8)
@@ -2087,20 +2145,48 @@ func _build_classic_hud(col: VBoxContainer) -> void:
 	var c_settings := _icon_button("settings", _open_settings_from_hud)
 	btns.add_child(c_pause)
 	btns.add_child(c_restart)
+	var c_hint: Button
+	if hud_id == "bright_web":
+		c_hint = _icon_button("hint", _use_hint)
+		btns.add_child(c_hint)
 	btns.add_child(c_settings)
 	var buttons_slot := _stable_hud_slot(btns, Vector2(172, 64))
 	buttons_slot.size_flags_horizontal = Control.SIZE_FILL
-	hud_classic.add_child(buttons_slot)
-	hud_sets["classic"] = {"roots": [header], "score": c_score, "best": c_best, "time": c_time, "bar": c_bar,
+	row.add_child(buttons_slot)
+	hud_sets[hud_id] = {"roots": [header], "score": c_score, "best": c_best, "time": c_time, "bar": c_bar,
 		"delta": c_delta, "combo_box": c_combo, "combo_style": c_style, "combo_mult": c_mult, "combo_count": c_count,
-		"combo_bar": c_cbar, "pause": c_pause, "restart": c_restart, "settings": c_settings}
-	hud_sets.classic.bonus = _build_bonus_widgets(hud_classic, false)
-	hud_classic.move_child(hud_sets.classic.bonus.slot, buttons_slot.get_index())
-	hud_sets.classic.slots = [time_slot, score_slot, best_slot, combo_slot, hud_sets.classic.bonus.slot]
-	for slot in hud_sets.classic.slots:
+		"combo_bar": c_cbar, "pause": c_pause, "restart": c_restart, "settings": c_settings, "row": row,
+		"captions": {"time": c_time_caption, "score": c_score_caption, "best": c_best_caption}}
+	if hud_id == "bright_web":
+		hud_sets[hud_id].hint = c_hint
+	else:
+		time_caption = c_time_caption
+		score_caption = c_score_caption
+		best_caption = c_best_caption
+	hud_sets[hud_id].bonus = _build_bonus_widgets(row, false)
+	row.move_child(hud_sets[hud_id].bonus.slot, buttons_slot.get_index())
+	hud_sets[hud_id].slots = [time_slot, score_slot, best_slot, combo_slot, hud_sets[hud_id].bonus.slot]
+	if hud_id == "bright_web":
+		var field_box := VBoxContainer.new()
+		field_box.add_theme_constant_override("separation", 3)
+		var field_caption := _caption(L.t("run_field_caption"))
+		field_caption.add_theme_font_size_override("font_size", 12)
+		var field_value := _label("1", f_num, 28)
+		field_box.add_child(field_caption)
+		field_box.add_child(field_value)
+		var field_space := Control.new()
+		field_space.custom_minimum_size.y = 4
+		field_box.add_child(field_space)
+		var field_slot := _stable_hud_slot(field_box)
+		row.add_child(field_slot)
+		row.move_child(field_slot, buttons_slot.get_index())
+		hud_sets[hud_id].slots.append(field_slot)
+		hud_sets[hud_id].field = field_value
+		hud_sets[hud_id].captions.run_field_caption = field_caption
+	for slot in hud_sets[hud_id].slots:
 		slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		slot.custom_minimum_size.y = 64
-	hud_sets.classic.buttons = buttons_slot
+	hud_sets[hud_id].buttons = buttons_slot
 
 
 func _layout_classic_header() -> void:
@@ -2123,6 +2209,42 @@ func _layout_classic_header() -> void:
 ## Android Classic keeps both side rails on every screen; all other HUDs stay intact.
 func _classic_android_sides() -> bool:
 	return OS.has_feature("android") and mode.id == "classic"
+
+
+## Desktop previews use the browser HUD; native Android keeps its original two rows.
+func _bright_web_hud() -> bool:
+	return mode.id == "bright" and not OS.has_feature("android")
+
+
+func _horizontal_combo_hud() -> bool:
+	return mode.id == "classic" or _bright_web_hud()
+
+
+func _layout_run_header() -> void:
+	if not board or not _bright_web_hud():
+		return
+	var set: Dictionary = hud_sets.bright_web
+	var header: Control = set.roots[0]
+	# Keep the board's sizing reservation; center its rendered frame and HUD together.
+	header.custom_minimum_size.y = hud.get_combined_minimum_size().y \
+		+ time_row.get_combined_minimum_size().y + board_column.get_theme_constant("separation")
+	var left := maxf(0.0, board.origin.x - board.frame_pad)
+	var right := minf(board.size.x, board.origin.x + logic.cols * board.cell + board.frame_pad)
+	var width := maxf(1.0, right - left)
+	var gap := int(clampf(width * 0.015, 4.0, 16.0))
+	set.row.add_theme_constant_override("separation", gap)
+	var buttons_width := floorf(width * 0.30)
+	set.buttons.custom_minimum_size.x = buttons_width
+	var stat_count: int = set.slots.size()
+	var stat_width := maxf(0.0, floorf((width - buttons_width - gap * stat_count) / stat_count))
+	for slot in set.slots:
+		slot.custom_minimum_size.x = stat_width
+	var frame_height := logic.rows * board.cell + board.frame_pad * 2.0
+	var composition_height := RUN_HUD_HEIGHT + RUN_HUD_GAP + frame_height
+	var top := maxf(0.0, (board_column.size.y - composition_height) * 0.5)
+	board.position.y = top + RUN_HUD_HEIGHT + RUN_HUD_GAP - board.origin.y + board.frame_pad
+	set.row.position = Vector2(board.position.x - header.position.x + left, top - header.position.y)
+	set.row.size = Vector2(width, RUN_HUD_HEIGHT)
 
 
 func _side_label(text: String, font: Font, font_size: int, color := CREAM) -> Label:
@@ -2390,8 +2512,10 @@ func _apply_hud(id: String) -> void:
 	btn_pause = set.pause
 	btn_restart = set.restart
 	btn_settings = set.settings
+	btn_hint = set.get("hint", hud_balance)
 	_set_classic_side_layout(id == "classic_android")
-	board.classic_feedback = mode.id == "classic"
+	board.classic_feedback = mode.id in ["classic", "bright"]
+	_layout_run_header()
 
 
 ## Keep Bright's two-row geometry: _dims() uses the remaining board area.
@@ -3698,6 +3822,8 @@ func _apply_texts() -> void:
 	best_caption.text = L.t("best")
 	for key in hud_sets.classic_android.captions:
 		hud_sets.classic_android.captions[key].text = L.t(key)
+	for key in hud_sets.bright_web.captions:
+		hud_sets.bright_web.captions[key].text = L.t(key)
 	ui.run_score_caption.text = L.t("score")
 	ui.run_best_caption.text = L.t("best")
 	ui.run_time_caption.text = L.t("time")
@@ -3763,7 +3889,7 @@ func _apply_texts() -> void:
 	ui.chk_voice.text = L.t("voice")
 	ui.btn_settings_done.text = L.t("done")
 	ui.rotate_label.text = L.t("rotate")
-	if mode.id == "classic":
+	if mode.id in ["classic", "bright"]:
 		_update_combo_widget()
 		_update_bonus_progress()
 	_fit_panels.call_deferred()
@@ -3858,6 +3984,8 @@ func _first_button(n: Node) -> Button:
 
 func _update_hud() -> void:
 	_update_bonus_progress()
+	if _bright_web_hud():
+		_set_hud_number(hud_sets.bright_web.field, wave)
 	var secs := int(ceil(time_left))
 	time_label.text = str(secs)
 	if mode.kind == "zen":
@@ -3890,6 +4018,10 @@ func _update_hud() -> void:
 
 
 func _flash_delta(text: String, negative: bool, unit := "time") -> void:
+	if mode.kind == "run" and time_delta.has_meta("delta_tween"):
+		var previous: Tween = time_delta.get_meta("delta_tween")
+		if previous and previous.is_valid():
+			previous.kill()
 	if unit == "steps":
 		time_delta.text = text + " " + L.t("steps_unit")
 	else:
@@ -3900,6 +4032,8 @@ func _flash_delta(text: String, negative: bool, unit := "time") -> void:
 	time_delta.add_theme_color_override("font_color", DANGER if negative else BRASS)
 	time_delta.modulate.a = 1.0
 	var tw := create_tween()
+	if mode.kind == "run":
+		time_delta.set_meta("delta_tween", tw)
 	tw.tween_interval(0.35)
 	tw.tween_property(time_delta, "modulate:a", 0.0, 0.4)
 
@@ -3932,15 +4066,15 @@ func _hud_activity(control: Control, active: bool, idle: Color) -> void:
 
 
 func _update_bonus_progress() -> void:
-	var active: bool = keeper.classic_bonus_combos and mode.id == "classic" and keeper.color_streak_hits >= 2 \
+	var active: bool = keeper.classic_bonus_combos and keeper.color_streak_hits >= 2 \
 		and state in [State.PLAYING, State.PAUSED]
-	for id in ["classic", "classic_android"]:
+	for id in ["classic", "classic_android", "bright_web"]:
 		if not hud_sets.has(id) or not hud_sets[id].has("bonus"):
 			continue
 		var widgets: Dictionary = hud_sets[id].bonus
 		_hud_activity(widgets.progress, active, HUD_IDLE)
 		widgets.caption.text = L.t("color_streak_chain")
-		widgets.gem.texture = BoardView.GEM_TEX[keeper.color_streak_kind if active else 6]
+		widgets.gem.texture = board._tex(keeper.color_streak_kind) if active else BoardView.GEM_TEX[6]
 		widgets.count.text = str(keeper.color_streak_hits) if active else "0"
 
 
@@ -3952,7 +4086,7 @@ func _show_bonus_feedback(res: Dictionary, at: Vector2i) -> void:
 		L.t("color_chain_start"), L.t("color_chain_length", {"n": keeper.color_streak_hits}), L.t("double_hit"),
 		L.t("hit_total", {"n": res.points}))
 	if int(res.color_streak_points) > 0:
-		for id in ["classic", "classic_android"]:
+		for id in ["classic", "classic_android", "bright_web"]:
 			var count: Label = hud_sets[id].bonus.count
 			var previous: Tween = count.get_meta("color_chain_tween") if count.has_meta("color_chain_tween") else null
 			if previous and previous.is_valid():
@@ -3967,12 +4101,12 @@ func _reset_bonus_feedback() -> void:
 	keeper.reset_bonus_combos()
 	if board:
 		board.clear_combo_feedback()
-	if banner_box and mode.id == "classic":
+	if banner_box and mode.id in ["classic", "bright"]:
 		var previous: Tween = banner_box.get_meta("banner_tween") if banner_box.has_meta("banner_tween") else null
 		if previous and previous.is_valid():
 			previous.kill()
 		banner_box.modulate.a = 0.0
-	for id in ["classic", "classic_android"]:
+	for id in ["classic", "classic_android", "bright_web"]:
 		if not hud_sets.has(id) or not hud_sets[id].has("bonus"):
 			continue
 		var count: Label = hud_sets[id].bonus.count
@@ -3994,17 +4128,22 @@ func _feedback_exclusion() -> Rect2:
 func _update_combo_widget(pulse := false) -> void:
 	combo_bar.value = keeper.window_left(play_time) / keeper.combo_window * 100.0
 	var c := keeper.combo
-	var classic: bool = mode.id == "classic"
+	var classic := _horizontal_combo_hud()
+	var modern: bool = mode.id in ["classic", "bright"]
+	if modern:
+		combo_count.uppercase = true
+	combo_count.text = (L.t("streak_caption") + (" %d" % c if c >= 2 else "")) if modern else L.t("combo_count", {"n": c})
+	if combo_count == hud_sets.bright.combo_count:
+		combo_count.visible = mode.id == "bright"
 	if c < 2 and not classic:
 		combo_box.modulate.a = 0.0
 		return
 	var m := ScoreKeeper.multiplier_for(c) if c >= 2 else 1
-	combo_count.text = L.t("streak_caption") if classic else L.t("combo_count", {"n": c})
 	if visual_profile in ["classic", "classic_run"]:
-		combo_mult.text = ("×%d" % m) if mode.id == "classic" else ("×%d · %d" % [m, c])
+		combo_mult.text = ("×%d" % m) if modern else ("×%d · %d" % [m, c])
 		combo_mult.add_theme_color_override("font_color", COMBO_COLORS[clampi(m, 1, 4) - 1].lightened(0.3))
 	else:
-		combo_mult.text = "%s ×%d · %d" % [L.t("combo").to_upper(), m, c]
+		combo_mult.text = ("×%d" % m) if modern else ("%s ×%d · %d" % [L.t("combo").to_upper(), m, c])
 		combo_style.bg_color = COMBO_COLORS[clampi(m, 1, 4) - 1]
 	if classic:
 		_hud_activity(combo_box, c >= 2, HUD_IDLE)
@@ -4020,8 +4159,12 @@ func _update_combo_widget(pulse := false) -> void:
 
 
 func _combo_break() -> void:
-	if mode.id == "classic":
+	if mode.id in ["classic", "bright"]:
+		combo_count.text = L.t("streak_caption")
+	if _horizontal_combo_hud():
 		_update_combo_widget()
+		if mode.id == "bright":
+			Sfx.play("combo_break", 1.0, -6.0)
 		return
 	if mode.skin == "bright":
 		Sfx.play("combo_break", 1.0, -6.0)
@@ -4030,8 +4173,12 @@ func _combo_break() -> void:
 
 
 func _banner(title: String, pts: int, secs: float, color: Color, sub := "", priority := 0) -> void:
-	if mode.id == "classic" and banner_box.has_meta("banner_tween"):
+	if mode.id in ["classic", "bright"] and banner_box.has_meta("banner_tween"):
 		if banner_box.modulate.a > 0.03 and int(banner_box.get_meta("priority", 0)) > priority:
+			if secs > 0.0 and sub != "":
+				# A last-hit special remains primary; the actual board rewards share its notice.
+				banner_sub.text += "\n" + sub
+				_fit_banner_text()
 			return # Perfect remains the main event; secondary rewards still show locally.
 		var previous: Tween = banner_box.get_meta("banner_tween")
 		if previous and previous.is_valid():
@@ -4041,23 +4188,11 @@ func _banner(title: String, pts: int, secs: float, color: Color, sub := "", prio
 	banner_title.add_theme_color_override("font_color", color)
 	if sub != "":
 		banner_sub.text = sub
-	elif secs <= 0.0 or not keeper.time_bonuses:
+	elif secs <= 0.0:
 		banner_sub.text = L.t("points_only", {"p": pts}) if pts > 0 else ""
 	else:
 		banner_sub.text = L.t("bonus_line", {"p": pts, "s": int(secs)})
-	var vs := get_viewport_rect().size
-	banner_title.add_theme_font_size_override("font_size", int(clampf(vs.x / 13.0, 34.0, 64.0)))
-	if mode.id == "classic":
-		# Leave room for the scale overshoot and outlines inside the playable area.
-		var width := maxf(100.0, minf(board.size.x, vs.x) / 1.08 - 36.0)
-		var title_size := banner_title.get_theme_font_size("font_size")
-		var measured := f_display.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size).x
-		banner_title.add_theme_font_size_override("font_size", maxi(16, floori(title_size * minf(1.0, width / maxf(measured, 1.0)))))
-		var sub_width := f_num.get_string_size(banner_sub.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 30).x
-		banner_sub.add_theme_font_size_override("font_size", maxi(14, floori(30.0 * minf(1.0, width / maxf(sub_width, 1.0)))))
-		banner_box.get_parent().queue_sort()
-	else:
-		banner_sub.add_theme_font_size_override("font_size", 30)
+	_fit_banner_text()
 	banner_box.pivot_offset = banner_box.size / 2
 	banner_box.scale = Vector2.ONE * 0.4
 	banner_box.modulate.a = 1.0
@@ -4065,10 +4200,28 @@ func _banner(title: String, pts: int, secs: float, color: Color, sub := "", prio
 	banner_box.set_meta("banner_tween", tw)
 	tw.tween_property(banner_box, "scale", Vector2.ONE * 1.08, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.tween_property(banner_box, "scale", Vector2.ONE, 0.12)
-	tw.tween_interval(0.9)
-	if mode.id != "classic":
+	var short_special: bool = mode.id in ["classic", "bright"] and priority in [2, 3]
+	tw.tween_interval(SPECIAL_BANNER_SECONDS - 0.55 if short_special else 0.9)
+	if mode.id != "classic" and not short_special:
 		tw.parallel().tween_property(banner_box, "position:y", banner_box.position.y - 30, 1.3)
-	tw.tween_property(banner_box, "modulate:a", 0.0, 0.35)
+	tw.tween_property(banner_box, "modulate:a", 0.0, 0.25 if short_special else 0.35)
+
+
+func _fit_banner_text() -> void:
+	var vs := get_viewport_rect().size
+	banner_title.add_theme_font_size_override("font_size", int(clampf(vs.x / 13.0, 34.0, 64.0)))
+	if mode.id in ["classic", "bright"]:
+		var width := maxf(100.0, minf(board.size.x, vs.x) / 1.08 - 36.0)
+		var title_size := banner_title.get_theme_font_size("font_size")
+		var measured := f_display.get_string_size(banner_title.text, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size).x
+		banner_title.add_theme_font_size_override("font_size", maxi(16, floori(title_size * minf(1.0, width / maxf(measured, 1.0)))))
+		var sub_width := 0.0
+		for line in banner_sub.text.split("\n"):
+			sub_width = maxf(sub_width, f_num.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, 30).x)
+		banner_sub.add_theme_font_size_override("font_size", maxi(14, floori(30.0 * minf(1.0, width / maxf(sub_width, 1.0)))))
+		banner_box.get_parent().queue_sort()
+	else:
+		banner_sub.add_theme_font_size_override("font_size", 30)
 
 
 # ================= layout =================
@@ -4099,6 +4252,7 @@ func _relayout_board() -> void:
 	if mode.id == "bright" and (_run_starting or _run_dims != Vector2i.ZERO):
 		# Resize the rendering only; never regenerate or transpose an active run.
 		board.refresh()
+		_layout_run_header()
 		return
 	var d := _dims()
 	if Vector2i(logic.cols, logic.rows) != d:
@@ -4145,7 +4299,7 @@ func _on_viewport_resized() -> void:
 	margin.add_theme_constant_override("margin_right", m + int(rounded.size.x))
 	margin.add_theme_constant_override("margin_bottom", m + int(rounded.size.y))
 	hud.add_theme_constant_override("separation", 10 if compact else 22)
-	combo_box.custom_minimum_size.x = 0 if mode.id == "classic" and not sides else (64 if sides or compact else 96)
+	combo_box.custom_minimum_size.x = 0 if _horizontal_combo_hud() and not sides else (64 if sides or compact else 96)
 	var short := s.y < 600
 	ui.menu_title.add_theme_font_size_override("font_size", 36 if short else (40 if s.x < 600 else 58))
 	ui.mode_title.add_theme_font_size_override("font_size", 24 if s.x < 440 else 32)

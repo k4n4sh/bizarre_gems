@@ -171,14 +171,14 @@ func run_in_game(main) -> Dictionary:
 	check(save.cloud_data() == before, "Classic results do not change progress or records")
 	for is_daily in [false, true]:
 		await main.start_game("bright", is_daily)
-		check(not main.keeper.timed_special and main.keeper.combo_window == 3.0 and not main._ab_active, "Bright/Daily retain old configuration")
+		check(main.keeper.timed_special and main.keeper.combo_window == 3.5 and not main._ab_active, "Bright/Daily share current combo rules")
 		for n in [3,2,3,3]:
 			fixture(main, n)
-		check(main.keeper.precise_events == 0, "Bright/Daily pair resets special")
+		check(main.keeper.precise_events == 1, "Bright/Daily pair preserves special progress")
 		main.keeper.reset()
 		for n in [3,3,3,3,3]:
 			fixture(main, n)
-		check(main.keeper.precise_events == 1 and main.keeper.perfect_events == 2, "Bright/Daily repeated Perfect retained")
+		check(main.keeper.precise_events == 1 and main.keeper.perfect_events == 1, "Bright/Daily Perfect completes its cycle")
 		main.go_menu()
 	save.store()
 	progress._save()

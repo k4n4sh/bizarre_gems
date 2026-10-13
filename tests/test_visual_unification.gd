@@ -35,7 +35,7 @@ func run_suite(main) -> Dictionary:
 		check(main.visual_profile == ("classic" if i == 0 else "classic_run") and main.board.visual_profile == main.visual_profile, "unified rendering profile")
 		check(main.ambient.skin == "classic", "velvet backdrop")
 		check(main.time_left == 120 and main.score == 0, "initial clock and score")
-		check(main.keeper.combo_window == (3.5 if i == 0 else 3.0), "combo windows retained")
+		check(main.keeper.combo_window == 3.5, "current combo windows shared")
 		check(main.logic.gems_left() == 270 if i == 0 else main.mode.kinds == 6, "mode gem count/kinds")
 		if i > 0:
 			check(main.hud.custom_minimum_size.y == 93 and main.time_row.custom_minimum_size.y == 35, "HUD reserves previous board area")

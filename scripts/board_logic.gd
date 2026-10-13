@@ -152,10 +152,7 @@ func matches_from(p: Vector2i) -> Array[Vector2i]:
 		else:
 			count[k] = count.get(k, 0) + 1
 	# jokers join the most common kind among the hits (the first one on a tie)
-	var join := -1
-	for k in count:
-		if join < 0 or count[k] > count[join]:
-			join = k
+	var join := _joker_join_kind(count)
 	if join >= 0:
 		count[join] += jokers
 	var out: Array[Vector2i] = []
@@ -167,6 +164,25 @@ func matches_from(p: Vector2i) -> Array[Vector2i]:
 		elif count[k] >= 2:
 			out.append(h)
 	return out
+
+
+## Read before removal. Uses the same ray order and tie rule as matches_from().
+## This effective color is only for Color Chain; stored joker kinds remain unchanged.
+func joker_match_kind(p: Vector2i) -> int:
+	var count := {}
+	for h in hits_from(p):
+		var kind := kind_at(h)
+		if not is_frozen(h) and kind != JOKER:
+			count[kind] = int(count.get(kind, 0)) + 1
+	return _joker_join_kind(count)
+
+
+static func _joker_join_kind(count: Dictionary) -> int:
+	var join := EMPTY
+	for kind in count:
+		if join < 0 or count[kind] > count[join]:
+			join = kind
+	return join
 
 
 func is_frozen(p: Vector2i) -> bool:

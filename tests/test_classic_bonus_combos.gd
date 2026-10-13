@@ -288,7 +288,7 @@ func runtime(main) -> void:
 	for config in [["bright",false], ["bright",true], ["levels",false], ["zen",false],
 			["puzzle",false], ["tutorial",false], ["classic",true], ["classic",false]]:
 		await main.start_game(config[0], config[1])
-		var active: bool = config == ["classic",false]
+		var active: bool = config == ["classic",false] or config[0] == "bright"
 		check(main.keeper.classic_bonus_combos == active, "mode eligibility " + str(config))
 		main.tut_step = 3
 		for i in 2:

@@ -30,10 +30,11 @@ func run_suite(main) -> Dictionary:
 		await main.start_game(config[0], config[1])
 		var classic: bool = config[0] == "classic" and not config[1]
 		var label := str(config)
-		check(main.keeper.combo_window == (3.5 if classic else 3.0), label + ": window")
+		var modern: bool = classic or config[0] == "bright"
+		check(main.keeper.combo_window == (3.5 if modern else 3.0), label + ": window")
 		check(main.keeper.tier_time == (1.0 if classic else 2.0), label + ": tier seconds")
 		check(main.keeper.streak_time == (1.0 if classic else 3.0), label + ": tenth-hit seconds")
-		check(main.keeper.timed_special == classic, label + ": special rules")
+		check(main.keeper.timed_special == modern, label + ": special rules")
 		check(main.keeper.time_bonuses == (main.mode.kind == "classic"), label + ": bonus eligibility")
 		check(not main._ab_active and not main.ComboExperiment.fixed_layout
 			and not main.ComboExperiment.is_read_only(), label + ": ordinary game and saving")

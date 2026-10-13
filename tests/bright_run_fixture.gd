@@ -3,6 +3,9 @@ extends "res://scripts/main.gd"
 var simulate_android := false
 var test_insets := Rect2()
 
+func _bright_web_hud() -> bool:
+	return mode.id == "bright" and not simulate_android
+
 func _is_touch_device() -> bool:
 	return simulate_android
 

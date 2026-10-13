@@ -5,7 +5,7 @@ extends RefCounted
 ## Combo: successful strikes in a row, each within combo_window of the previous one.
 ## A miss or a pause longer than the window resets it. Points are multiplied by the combo tier.
 ##
-## Legacy special combo is consecutive 3+ hits. Classic opts into timed_special:
+## Legacy special combo is consecutive 3+ hits. Classic and Bright Run opt into timed_special:
 ## 5 seconds per 3+ hit; pairs extend by 0.5 seconds; Perfect ends the cycle.
 
 const COMBO_WINDOW := 3.0  ## Legacy/non-Classic default.
@@ -33,8 +33,9 @@ const COLOR_STREAK_MIN_GEMS := 2  ## A color must contribute at least a pair to 
 const TIERS := [[9, 4], [5, 3], [2, 2], [0, 1]]
 
 ## Extra seconds for combos, streaks, precise/perfect combos and shining gems. Bright mode
-## turns them off (its timer also speeds up per level), so a round can't go on forever.
+## turns them off; its time economy comes from completed boards.
 var time_bonuses := true
+var hit_time_rewards := true  ## Bright Run disables even the basic group seconds.
 var tier_time := TIER_TIME
 var streak_time := STREAK_TIME
 var combo_window := COMBO_WINDOW
@@ -72,6 +73,14 @@ static func multiplier_for(c: int) -> int:
 func configure_time_rewards(classic: bool) -> void:
 	tier_time = CLASSIC_TIER_TIME if classic else TIER_TIME
 	streak_time = CLASSIC_STREAK_TIME if classic else STREAK_TIME
+
+
+## Share current combo rules; leave other modes and explicit Classic experiments intact.
+func configure_combo_rules(classic: bool, run: bool, classic_window := CLASSIC_COMBO_WINDOW, classic_timed := true) -> void:
+	combo_window = CLASSIC_COMBO_WINDOW if run else (classic_window if classic else COMBO_WINDOW)
+	timed_special = run or (classic and classic_timed)
+	classic_bonus_combos = classic or run
+	hit_time_rewards = not run
 
 
 func reset() -> void:
@@ -128,10 +137,15 @@ func miss() -> bool:
 
 
 func reset_bonus_combos() -> void:
-	_double_hit_slot = Vector2i(-1, -1)
+	reset_double_hit()
 	color_streak_kind = BoardLogic.EMPTY
 	color_streak_hits = 0
 	_previous_color_points.clear()
+
+
+## A replacement board invalidates only the pending positional pair.
+func reset_double_hit() -> void:
+	_double_hit_slot = Vector2i(-1, -1)
 
 
 ## Keep the pending logical slot attached to the same cell when the board turns.
@@ -144,7 +158,8 @@ func transpose_bonus_slot() -> void:
 func _color_streak_for_hit(ordinary_points: int, removed_kinds: Array[int]) -> Dictionary:
 	var counts := {}
 	for kind in removed_kinds:
-		counts[kind] = int(counts.get(kind, 0)) + 1
+		if kind >= 0 and kind != BoardLogic.JOKER:
+			counts[kind] = int(counts.get(kind, 0)) + 1
 	var current: Dictionary = {}
 	for kind in counts:
 		if int(counts[kind]) >= COLOR_STREAK_MIN_GEMS:
@@ -229,6 +244,8 @@ func hit(n: int, now: float, shining := 0, slot := Vector2i(-1, -1), removed_kin
 		time += streak_time
 	if not time_bonuses:
 		time = float(BoardLogic.bonus_for(n))  # only the basic +1 s / +2 s for 3 / 4 gems
+	if not hit_time_rewards:
+		time = 0.0
 	var double_hit_points := 0
 	var color_streak_points := 0
 	var color_streak_started := false
