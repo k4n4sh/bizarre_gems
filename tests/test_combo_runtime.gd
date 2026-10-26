@@ -91,7 +91,17 @@ func balance(main) -> void:
 			source._fixture(main, 3 if hit >= (8 if event == "precise" else 7) else 2)
 		var before_time: float = main.time_left
 		var before_score: int = main.score
+		var sfx = main.get_node("/root/Sfx")
+		for player in sfx._pool:
+			player.stream = null
+		var save = main.get_node("/root/Save")
+		save.sound = true  # Dummy audio driver: streams are assigned but nothing is heard
 		source._fixture(main, 4, 2)
+		save.sound = false
+		check(sfx._pool.filter(func(player): return player.stream == sfx.SOUNDS[event]).size() == 1, "Classic plays one %s sound" % event)
+		for player in sfx._pool:
+			player.stop()
+			player.stream = null
 		check(main.time_left - before_time == (10.0 if event == "precise" else 12.0), "tenth hit: base/special/streak/shine seconds " + event)
 		var hot_points := ScoreKeeper.hot_bonus(main.keeper.hot)  # the hot streak comes on top of these rules
 		check(main.score - before_score - hot_points == (56 if event == "precise" else 78), "tenth hit: exact combined score " + event)

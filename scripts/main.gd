@@ -1272,8 +1272,7 @@ func _on_slot(p: Vector2i) -> void:
 		if res.mult >= 3:
 			_hitstop(0.05)
 	if event == "precise":
-		if mode.skin == "bright":
-			Sfx.play("precise")
+		Sfx.play("precise")
 		Haptics.buzz("precise")
 		ambient.pulse(UiKit.BRASS_LIGHT, 0.8)
 		board.play_wave(p, 2.0, true)
@@ -1286,8 +1285,7 @@ func _on_slot(p: Vector2i) -> void:
 		if mode.id != "bright" or daily:
 			_set_theme(_next_look())
 	elif event == "perfect":
-		if mode.skin == "bright":
-			Sfx.play("perfect")
+		Sfx.play("perfect")
 		Haptics.buzz("perfect")
 		ambient.pulse(Color("#ff9ed2"), 1.0)
 		board.play_wave(p, 3.0, true)
