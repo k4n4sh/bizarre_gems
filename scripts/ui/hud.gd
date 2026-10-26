@@ -8,6 +8,7 @@ signal hint_pressed
 signal home_pressed
 @export var skin := "bright"
 const HUD_IDLE := Color(.47,.59,.65,.72)
+const BUTTON_STATES := ["normal", "hover", "pressed", "disabled", "focus"]
 @onready var score_label: Label = $Stats/Score/Block/Value
 @onready var best_label: Label = $Stats/Best/Block/Value
 @onready var time_label: Label = $Stats/Time/Block/Value
@@ -46,6 +47,7 @@ func _ready() -> void:
 	if btn_home: btn_home.pressed.connect(func(): Sfx.play("click"); home_pressed.emit())
 	if plates:
 		$Plates/TimeRing.source = time_bar
+		$Plates/TimeRing.drain_clockwise = true
 		$Plates/StreakRing.source = $Stats/Combo/Streak/Panel/VBox/Bar
 	configure("bright" if skin == "bright" else "classic",false)
 
@@ -152,47 +154,52 @@ func layout_top(rect: Rect2) -> Rect2:
 		p.add_theme_stylebox_override("panel", plate_style)
 		_place(p, boxes[k])
 	_place($Stats, Rect2(Vector2.ZERO, size))
-	var ring := floorf(minf(56, h - 24))
+	var ring := floorf(minf(52, h - 28))
 	var ring_y := rect.position.y + floorf((h - ring) * 0.5)
 	var time_ring: HudRing = $Plates/TimeRing
 	var streak_ring: HudRing = $Plates/StreakRing
 	_place(time_ring, Rect2(boxes.Time.position.x + pad, ring_y, ring, ring))
 	_place(streak_ring, Rect2(boxes.Streak.position.x + pad, ring_y, ring, ring))
 	var text_x := pad + ring + 12
-	var text_h := 64.0
+	var text_h := minf(56.0, h - 12)
 	var text_y := rect.position.y + floorf((h - text_h) * 0.5)
 	_place($Stats/Time, Rect2(boxes.Time.position.x + text_x, text_y, side - text_x - pad, text_h))
 	_place($Stats/Combo, Rect2(boxes.Streak.position.x + text_x, text_y, side - text_x - pad, text_h))
 	_fit_combo()
 	# Middle plate: one caption row for score, chain and record, the bar under the numbers.
-	var inner := Rect2(boxes.Score.position + Vector2(pad + 4, 10), Vector2(mid - pad * 2 - 8, h - 20))
+	var inner := Rect2(boxes.Score.position + Vector2(pad + 4, 6), Vector2(mid - pad * 2 - 8, h - 12))
 	var bar_h := RecordBar.COMPACT_HEIGHT
-	var row_h := inner.size.y - bar_h - 6
+	var row_h := inner.size.y - bar_h - 4
 	var chain_w := 90.0
 	var num_w := (inner.size.x - chain_w) * 0.5
 	_place($Stats/Score, Rect2(inner.position, Vector2(num_w, row_h)))
 	_place($Stats/Chain, Rect2(inner.position + Vector2(num_w, 0), Vector2(chain_w, row_h)))
 	_place($Stats/Best, Rect2(inner.position + Vector2(num_w + chain_w, 0), Vector2(num_w, row_h)))
 	_top_typography()
-	# Buttons: two squares in a row on each side, as tall as the plates.
+	# Buttons: two squares in a row on each side, as tall as the plates, spaced like the plates.
 	_place($Buttons, Rect2(Vector2.ZERO, size))
 	var b := h
+	var icon_pad := floorf(b * 0.16)
 	var columns := [[btn_home, btn_pause], [btn_restart, btn_settings]]
-	var xs := [rect.position.x - gap - b * 2 - 4, rect.end.x + gap]
+	var xs := [rect.position.x - gap * 2 - b * 2, rect.end.x + gap]
 	for c in 2:
 		for i in 2:
 			var btn: Button = columns[c][i]
 			btn.visible = true
 			btn.expand_icon = true
+			for state in BUTTON_STATES:
+				var style := btn.get_theme_stylebox(state).duplicate() as StyleBox
+				style.set_content_margin_all(icon_pad)
+				btn.add_theme_stylebox_override(state, style)
 			btn.custom_minimum_size = Vector2.ONE * b
 			btn.size = Vector2.ONE * b
 			btn.scale = Vector2.ONE
-			btn.position = Vector2(xs[c] + i * (b + 4), rect.position.y)
+			btn.position = Vector2(xs[c] + i * (b + gap), rect.position.y)
 	return Rect2(inner.position.x, inner.end.y - bar_h, inner.size.x, bar_h)
 
 ## Width the top layout needs outside the field frame on each side (two buttons in a row).
 func top_side_room(height: float) -> float:
-	return height * 2 + 4 + 8
+	return height * 2 + 8 * 2
 
 
 func _top_typography() -> void:
@@ -200,7 +207,7 @@ func _top_typography() -> void:
 		slot.top_align = slot != $Stats/Time and slot != $Stats/Combo/Streak
 	for slot in [$Stats/Score, $Stats/Best]:
 		slot.get_node("Block/Bar").visible = false
-		slot.get_node("Block/Value").add_theme_font_size_override("font_size", 30)
+		slot.get_node("Block/Value").add_theme_font_size_override("font_size", 26)
 	$Stats/Time/Block/Bar.visible = false
 	$Stats/Best/Block/Caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	best_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -218,7 +225,9 @@ func _top_off() -> void:
 	top_layout = false
 	plates.visible = false
 	btn_home.visible = false
-	for b in [btn_pause, btn_restart, btn_settings]: b.expand_icon = false
+	for b in [btn_pause, btn_restart, btn_settings]:
+		b.expand_icon = false
+		for state in BUTTON_STATES: b.remove_theme_stylebox_override(state)
 	for slot in [$Stats/Time, $Stats/Score, $Stats/Best, $Stats/Chain, $Stats/Combo/Streak]: slot.top_align = false
 	best_label.remove_theme_color_override("font_color")
 	$Stats/Best/Block/Caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT

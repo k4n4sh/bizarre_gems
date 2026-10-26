@@ -8,6 +8,7 @@ var color := UiKit.BRASS
 var track := Color(1, 1, 1, 0.14)
 var thickness := 6.0
 var text := ""
+var drain_clockwise := false  ## the empty part grows clockwise from the top (a countdown)
 var text_color := UiKit.CREAM
 var _shown := -1.0
 
@@ -39,7 +40,8 @@ func _draw() -> void:
 	draw_arc(c, r, 0, TAU, 48, track, thickness, true)
 	var v := clampf(_shown, 0.0, 1.0)
 	if v > 0.0:
-		draw_arc(c, r, -PI * 0.5, -PI * 0.5 + TAU * v, maxi(4, int(48 * v)), color, thickness, true)
+		var start := -PI * 0.5 + (TAU * (1.0 - v) if drain_clockwise else 0.0)
+		draw_arc(c, r, start, start + TAU * v, maxi(4, int(48 * v)), color, thickness, true)
 	if text != "":
 		var fs := int(r * 0.8)
 		var font := UiKit.NUMBER_FONT

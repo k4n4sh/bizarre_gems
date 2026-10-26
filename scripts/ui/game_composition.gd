@@ -3,8 +3,9 @@ extends Control
 ## Preserve refinement's board sizing reservations even when the visible Run header is compact.
 
 const STRIP_GAP := 6.0
-const TOP_HEIGHT := 96.0  ## Classic top plates (desktop/web)
-const TOP_GAP := 12.0
+const TOP_HEIGHT := 76.0  ## Classic top plates (desktop/web)
+const TOP_GAP := 10.0
+const TOP_MARGIN := 0.0  ## plates sit almost at the top edge (the game layer already has a small inset)
 
 func arrange_practice(board: BoardView, hud: Hud, card: PanelContainer) -> void:
 	if size.x < 1 or size.y < 1: return
@@ -36,6 +37,7 @@ func arrange(board: BoardView, hud: Hud, mode_id: String, android: bool,
 		view: Vector2, insets: Rect2, strip: Control = null) -> void:
 	if size.x <= 0 or size.y <= 0:
 		return
+	board.shadow_room = 0.0
 	var strip_room := strip.custom_minimum_size.y + STRIP_GAP if strip and strip.visible else 0.0
 	var sides := mode_id == "classic" and android
 	if sides:
@@ -97,12 +99,14 @@ func _place_strip(strip: Control, board: BoardView) -> void:
 func _arrange_top(board: BoardView, hud: Hud, strip: Control) -> void:
 	var plate_h := TOP_HEIGHT
 	var room := hud.top_side_room(plate_h)
-	board.position = Vector2(room, plate_h + TOP_GAP)
-	board.size = Vector2(maxf(1, size.x - room * 2), maxf(1, size.y - plate_h - TOP_GAP))
+	var top := TOP_MARGIN
+	# The board rect keeps room for the frame shadow (the board clips its contents).
+	var shade := maxf(0, board.frame_shadow() - board.frame_pad)
+	board.shadow_room = shade
+	board.position = Vector2(room - shade, top + plate_h + TOP_GAP - shade)
+	board.size = Vector2(maxf(1, size.x - (room - shade) * 2), maxf(1, size.y - board.position.y))
 	board.refresh()
 	var frame := Vector2(board.logic.cols, board.logic.rows) * board.cell + Vector2.ONE * board.frame_pad * 2
-	var top := maxf(0, floorf((size.y - plate_h - TOP_GAP - frame.y) / 2))
-	board.position.y = top + plate_h + TOP_GAP - board.origin.y + board.frame_pad
 	var left := board.position.x + board.origin.x - board.frame_pad
 	hud.position = Vector2.ZERO
 	hud.size = size

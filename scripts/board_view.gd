@@ -50,6 +50,7 @@ const BLINK := 0.14  ## seconds a knocked-out gem flares white
 const EMBERS: Array[Color] = [Color("#ff5a1f"), Color("#ff9a2e"), Color("#ffd04d")]
 const TEXT_COLORS: Array[Color] = [Color(0.97, 0.89, 0.66), Color(1.0, 0.78, 0.35), Color(1.0, 0.55, 0.3), Color(1.0, 0.42, 0.7)]
 var frame_pad := 10.0
+var shadow_room := 0.0  ## extra margin so the frame's shadow is not clipped by clip_contents
 
 var logic: BoardLogic
 var interactive := false:
@@ -251,7 +252,7 @@ func _apply_skin() -> void:
 func _relayout() -> void:
 	if logic == null:
 		return
-	var avail := size - Vector2.ONE * frame_pad * 2
+	var avail := size - Vector2.ONE * (frame_pad + shadow_room) * 2
 	var base := maxf(8.0, floorf(minf(avail.x / logic.cols, avail.y / logic.rows)))
 	cell = base * zoom
 	var bs := Vector2(logic.cols, logic.rows) * cell
@@ -276,6 +277,11 @@ func reset_zoom() -> void:
 		_touches.clear()
 	_pinch.clear()
 	_relayout()
+
+
+## How far the frame's shadow reaches past the frame.
+func frame_shadow() -> float:
+	return _frame.shadow_size
 
 
 func refresh() -> void:
