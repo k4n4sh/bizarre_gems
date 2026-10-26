@@ -330,3 +330,8 @@ praise_6,Легендарно!,Legendary!,Efsane!
 home_first,Поставь первый рекорд!,Set your first record!,İlk rekorunu koy!
 home_level,Уровень {n},Level {n},Seviye {n}
 daily_new_in,Новое через {t},New one in {t},Yenisi {t} sonra
+to_record,До рекорда,To best,Rekora
+res_gems,Камней,Gems,Taş
+res_combo,Лучшая серия,Best streak,En iyi seri
+res_precise,Точных комбо,Precise combos,Hassas kombo
+res_hot,Без промахов,No-miss run,Hatasız seri

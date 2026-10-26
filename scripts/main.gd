@@ -281,6 +281,7 @@ func _connect_screens() -> void:
 	map.level_chosen.connect(start_level)
 	map.puzzle_chosen.connect(start_puzzle)
 	pause.resume_pressed.connect(_resume_play)
+	pause.restart_pressed.connect(func(): start_game(mode.id, daily, challenge))
 	confirm.leave_pressed.connect(go_menu)
 	rules.tutorial_pressed.connect(func(): start_game("tutorial"))
 	leaders.login_done.connect(func(): Yandex.submit_score(Save.best_for(mode.id), mode.board))
@@ -1015,6 +1016,7 @@ func pause_game() -> void:
 	Engine.time_scale = 1.0
 	board.interactive = false
 	Yandex.gameplay(false)
+	pause.set_summary(score, hud.time_label.text, best_start - score + 1 if best_start > 0 and score <= best_start else 0)
 	show_screen(pause)
 
 

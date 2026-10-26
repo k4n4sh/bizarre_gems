@@ -4,6 +4,7 @@
 [ext_resource type="Texture2D" path="res://assets/ui/icon_play.png" id="2"]
 [ext_resource type="Texture2D" path="res://assets/ui/icon_home.png" id="3"]
 [ext_resource type="Texture2D" path="res://assets/ui/icon_settings.png" id="4"]
+[ext_resource type="Texture2D" path="res://assets/ui/icon_restart.png" id="5"]
 
 [node name="Pause" type="PanelContainer"]
 script = ExtResource("1")
@@ -19,33 +20,103 @@ theme_override_font_sizes/font_size = 40
 text = "paused"
 horizontal_alignment = 1
 
-[node name="Buttons" type="HFlowContainer" parent="VBox"]
+[node name="Summary" type="HBoxContainer" parent="VBox"]
 layout_mode = 2
+unique_name_in_owner = true
 alignment = 1
-theme_override_constants/h_separation = 10
-theme_override_constants/v_separation = 10
+theme_override_constants/separation = 28
 
-[node name="Resume" type="Button" parent="VBox/Buttons"]
+[node name="Score" type="VBoxContainer" parent="VBox/Summary"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="Caption" type="Label" parent="VBox/Summary/Score"]
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "score"
+horizontal_alignment = 1
+uppercase = true
+
+[node name="Value" type="Label" parent="VBox/Summary/Score"]
+layout_mode = 2
+
+theme_type_variation = &"Number"
+theme_override_font_sizes/font_size = 28
+text = "0"
+horizontal_alignment = 1
+
+[node name="Time" type="VBoxContainer" parent="VBox/Summary"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="Caption" type="Label" parent="VBox/Summary/Time"]
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "time"
+horizontal_alignment = 1
+uppercase = true
+
+[node name="Value" type="Label" parent="VBox/Summary/Time"]
+layout_mode = 2
+
+theme_type_variation = &"Number"
+theme_override_font_sizes/font_size = 28
+text = "0"
+horizontal_alignment = 1
+
+[node name="ToRecord" type="VBoxContainer" parent="VBox/Summary"]
+layout_mode = 2
+unique_name_in_owner = true
+theme_override_constants/separation = 0
+
+[node name="Caption" type="Label" parent="VBox/Summary/ToRecord"]
+layout_mode = 2
+theme_type_variation = &"Caption"
+text = "to_record"
+horizontal_alignment = 1
+uppercase = true
+
+[node name="Value" type="Label" parent="VBox/Summary/ToRecord"]
+layout_mode = 2
+theme_type_variation = &"Number"
+theme_override_font_sizes/font_size = 28
+text = "0"
+horizontal_alignment = 1
+
+[node name="Resume" type="Button" parent="VBox"]
 layout_mode = 2
 unique_name_in_owner = true
 theme_type_variation = &"PrimaryButton"
 text = "resume"
 icon = ExtResource("2")
 
-[node name="Menu" type="Button" parent="VBox/Buttons"]
+[node name="Row" type="HBoxContainer" parent="VBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Restart" type="Button" parent="VBox/Row"]
 layout_mode = 2
 unique_name_in_owner = true
+size_flags_horizontal = 3
+text = "restart"
+icon = ExtResource("5")
+
+[node name="Settings" type="Button" parent="VBox/Row"]
+layout_mode = 2
+unique_name_in_owner = true
+size_flags_horizontal = 3
+text = "settings"
+icon = ExtResource("4")
+
+[node name="Menu" type="Button" parent="VBox"]
+layout_mode = 2
+unique_name_in_owner = true
+theme_override_colors/font_color = Color(0.6667, 0.7216, 0.9255, 1)
+theme_override_colors/icon_normal_color = Color(0.6667, 0.7216, 0.9255, 1)
 text = "menu"
 icon = ExtResource("3")
 
-[node name="Settings" type="Button" parent="VBox/Buttons"]
-layout_mode = 2
-unique_name_in_owner = true
-theme_type_variation = &"IconButton"
-icon = ExtResource("4")
-custom_minimum_size = Vector2(52, 52)
-icon_alignment = 1
-
-[connection signal="pressed" from="VBox/Buttons/Resume" to="." method="_on_resume_pressed"]
-[connection signal="pressed" from="VBox/Buttons/Menu" to="." method="_on_menu_pressed"]
-[connection signal="pressed" from="VBox/Buttons/Settings" to="." method="_on_settings_pressed"]
+[connection signal="pressed" from="VBox/Resume" to="." method="_on_resume_pressed"]
+[connection signal="pressed" from="VBox/Row/Restart" to="." method="_on_restart_pressed"]
+[connection signal="pressed" from="VBox/Row/Settings" to="." method="_on_settings_pressed"]
+[connection signal="pressed" from="VBox/Menu" to="." method="_on_menu_pressed"]
