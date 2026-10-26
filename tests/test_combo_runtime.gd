@@ -93,7 +93,8 @@ func balance(main) -> void:
 		var before_score: int = main.score
 		source._fixture(main, 4, 2)
 		check(main.time_left - before_time == (10.0 if event == "precise" else 12.0), "tenth hit: base/special/streak/shine seconds " + event)
-		check(main.score - before_score == (56 if event == "precise" else 78), "tenth hit: exact combined score " + event)
+		var hot_points := ScoreKeeper.hot_bonus(main.keeper.hot)  # the hot streak comes on top of these rules
+		check(main.score - before_score - hot_points == (56 if event == "precise" else 78), "tenth hit: exact combined score " + event)
 		check(main.keeper.precise_events == 1 and main.keeper.perfect_events == (0 if event == "precise" else 1), "no duplicate special event " + event)
 		main.go_menu()
 
@@ -113,7 +114,10 @@ func bonuses(main) -> void:
 	for i in 6:
 		main.play_time += 0.1
 		main._on_slot(Vector2i(6, 3))
-	check(main.score == 59 and main.keeper.score == 59 and main.cleared == 12 and main.keeper.color_streak_hits == 6,
+	var hot_total := 0  # the hot streak comes on top of these rules
+	for h in range(1, 7):
+		hot_total += ScoreKeeper.hot_bonus(h)
+	check(main.score - hot_total == 59 and main.keeper.score - hot_total == 59 and main.cleared == 12 and main.keeper.color_streak_hits == 6,
 		"six real pairs: three Double Hits and continuous Color Chain, exact score 59")
 	check(main.time_left == 122.0 and main.keeper.combo == 6, "six pairs: two tier seconds")
 	check(receipt(main).double_hit_points == 3 and receipt(main).color_streak_points == 6,

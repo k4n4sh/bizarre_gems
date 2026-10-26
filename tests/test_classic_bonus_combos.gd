@@ -94,7 +94,7 @@ func rules() -> void:
 	hit(k, 2, 3.0, 0)
 	r = hit(k, 4, 4.0, 0)
 	check(r.mult == 3 and r.ordinary_points == 18 and r.double_hit_points == 9
-		and r.color_streak_points == 22 and r.points == 49, "activation adds first x2 share and current x3 share, plus Double Hit")
+		and r.color_streak_points == 22 and r.points - r.hot_points == 49, "activation adds first x2 share and current x3 share, plus Double Hit")
 	k = keeper()
 	for i in 4:
 		hit(k, 2, i, i % 2, Vector2i(i, 0))

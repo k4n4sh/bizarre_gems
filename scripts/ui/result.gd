@@ -22,21 +22,29 @@ func refresh() -> void:
 	if r.has("localization"):
 		var c: Dictionary = r.localization
 		%Title.text = L.t(c.title)
-		%NewBest.text = L.t(c.new_best) if c.new_best != "" else ""
+		%NewBest.text = L.t(c.new_best) if c.new_best != "" else (L.t("near_best",{"n":c.near}) if int(c.get("near",0)) > 0 else "")
 		var line := L.t("cleared",{"n":c.cleared,"w":c.wave})+"\n"+L.t("stats",{"combo":c.combo,"precise":c.precise})
-		if c.daily: line = L.t("daily")+" · "+L.t("daily_best",{"n":c.daily_best})+"\n"+line
+		if int(c.get("best_hot",0)) > 0: line += "\n"+L.t("best_hot",{"n":c.best_hot})
+		if c.daily: line =L.t("daily")+" · "+L.t("daily_best",{"n":c.daily_best})+"\n"+line
 		if c.target >= 0: line = L.t("ch_won",{"n":c.target})+"\n"+line if r.score > c.target else L.t("ch_lost",{"n":c.target,"d":c.target-r.score+1})+"\n"+line
 		%Line.text = line
 	if not _strike.is_empty(): %Caption.text = L.t("best_strike",{"n":_strike.n,"p":_strike.points})
 
 
-## r: title, score, new_best (text or ""), line, reward (crystals), can_continue, can_shuffle, can_share
+## r: title, score, new_best (text or ""), near ("just N short" or ""), line, reward (crystals), can_continue, can_shuffle, can_share
 func show_result(r: Dictionary) -> void:
 	_copy = r.duplicate(true)
 	%Title.text = r.title
 	%Score.text = str(r.score)
-	%NewBest.text = r.new_best
-	%NewBest.visible = r.new_best != ""
+	# a new record, or how little was missing for one
+	var near: String = r.get("near", "")
+	%NewBest.text = r.new_best if r.new_best != "" else near
+	%NewBest.visible = %NewBest.text != ""
+	%NewBest.add_theme_color_override("font_color", UiKit.BRASS_LIGHT if r.new_best != "" else Color("#ffb070"))
+	if %NewBest.visible:
+		%NewBest.pivot_offset = %NewBest.size / 2
+		%NewBest.scale = Vector2.ONE * 0.6
+		create_tween().tween_property(%NewBest, "scale", Vector2.ONE, 0.45).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
 	%Line.text = r.line
 	var reward: int = r.reward
 	%Reward.text = L.t("reward_line", {"n": reward})

@@ -56,7 +56,11 @@ func layout_contract(main, android: bool, label: String) -> void:
 	if android: return # The accepted portrait arrangement is intentionally distinct.
 	check(stats.size.x == frame.size.x and stats.position.x == frame.position.x,label+" header measures actual field frame")
 	check(stats.size.y == (128 if frame.size.x < 680 else 64),label+" adaptive row count uses actual width")
-	check(is_equal_approx(stats.end.y+16,frame.position.y),label+" header above actual field")
+	var strip: Control = main.record_bar
+	var strip_room: float = strip.custom_minimum_size.y+6.0 if strip.visible else 0.0
+	check(is_equal_approx(stats.end.y+16+strip_room,frame.position.y),label+" header above actual field")
+	check(not strip.visible or (strip.position.y >= stats.end.y and is_equal_approx(strip.get_rect().end.y+6.0,frame.position.y)
+		and is_equal_approx(strip.position.x,frame.position.x)),label+" record bar between header and field")
 func badge_cycle(main, baseline: Dictionary, label: String) -> void:
 	for length in [2,5,9,12345,0]:
 		main.hud.set_combo(length,true)

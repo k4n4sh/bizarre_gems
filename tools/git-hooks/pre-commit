@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Lint the staged GDScript files before a commit (enable once: git config core.hooksPath tools/git-hooks).
+# Skip in an emergency with  git commit --no-verify
+mapfile -t f < <(git diff --cached --name-only --diff-filter=ACMR -- '*.gd')
+((${#f[@]})) || exit 0
+exec "$(git rev-parse --show-toplevel)/tools/lint.sh" "${f[@]}"

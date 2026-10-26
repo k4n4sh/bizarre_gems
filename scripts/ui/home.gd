@@ -16,10 +16,10 @@ func refresh() -> void:
 	%Best.text = L.t("best") + ": " + str(Save.best_for(str(Save.mode)))
 	%Crystals.text = str(Progress.crystals)
 	var due := Progress.unclaimed()
-	%Tasks.badge = " (%d)" % due if due > 0 else ""
-	%Gift.badge = " !" if Progress.gift_ready() else ""
+	%Tasks.badge = str(due) if due > 0 else ""
+	%Gift.badge = "!" if Progress.gift_ready() else ""
 	var adue := Progress.achievements_due()
-	%More.badge = " (%d)" % adue if adue > 0 else ""
+	%More.badge = str(adue) if adue > 0 else ""
 	%Challenge.visible = not challenge.is_empty()
 	if not challenge.is_empty():
 		%Challenge.text = L.t("ch_card", {"n": challenge.score, "m": L.t("mode_" + str(challenge.mode))})

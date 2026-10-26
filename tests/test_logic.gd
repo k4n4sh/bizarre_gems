@@ -389,5 +389,55 @@ func _init() -> void:
 	r = k.hit(2, 0.0, 1)
 	check(r.points == 2 + ScoreKeeper.SHINE_POINTS and r.time == ScoreKeeper.SHINE_TIME, "a shining gem adds +5 points and +2 s")
 
+	k.reset()
+	for i in ScoreKeeper.HOT_AT - 1:
+		r = k.hit(2, i * 10.0)  # slow strikes: no combo, but the streak still grows
+	check(r.hot == ScoreKeeper.HOT_AT - 1 and not r.ignited and r.points == 2, "the streak grows without a combo, no bonus yet")
+	r = k.hit(2, 100.0)
+	check(r.ignited and r.points == 2 + ScoreKeeper.HOT_POINTS, "the 5th strike in a row sets the streak on fire")
+	for i in 20:
+		r = k.hit(2, 200.0 + i * 10.0)
+	check(r.hot == 25 and r.points == 2 + ScoreKeeper.HOT_POINTS * ScoreKeeper.HOT_MAX_STEPS and not r.ignited,
+		"the fire bonus is capped")
+	k.update(1000.0)
+	check(k.hot == 25, "a combo running out leaves the streak alone")
+	k.miss()
+	check(k.hot == 0 and k.lost_hot == 25 and k.best_hot == 25, "a miss puts the streak out")
+
+	# Classic rules: a timeout resets combo, special and bonus chains, never the hot streak.
+	var hk := ScoreKeeper.new()
+	hk.configure_combo_rules(true, false)
+	var reds: Array[int] = [0, 0]
+	for i in ScoreKeeper.HOT_AT:
+		hk.hit(2, i * 1.0, 0, Vector2i(i, 0), reds)
+	hk.hit(3, 5.0, 0, Vector2i(9, 9), [0, 0, 0] as Array[int])
+	check(hk.precise_streak == 1 and hk.color_streak_hits > 0, "precise and colour chains are running")
+	check(hk.update(5.0 + ScoreKeeper.CLASSIC_COMBO_WINDOW + 0.01), "the combo times out")
+	check(hk.combo == 0 and hk.precise_streak == 0 and hk.color_streak_hits == 0 and hk.hot == ScoreKeeper.HOT_AT + 1,
+		"a timeout keeps the hot streak while combo, special and colour chains end")
+	hk.miss()
+	check(hk.hot == 0 and hk.lost_hot == ScoreKeeper.HOT_AT + 1, "a missed strike puts it out")
+
+	# Hot points come last: ordinary, double-hit and colour-chain points are identical without them.
+	var on := ScoreKeeper.new()
+	var off := ScoreKeeper.new()
+	off.hot_streak = false
+	var same := true
+	var hot_sum := 0
+	var doubles := 0
+	for kp in [on, off]:
+		kp.configure_combo_rules(true, false)
+	for i in 12:
+		var slot := Vector2i(i / 2, 0)  # each slot twice in a row: every second strike is a double hit
+		var ha := on.hit(2, i * 1.0, 0, slot, reds)
+		var hb := off.hit(2, i * 1.0, 0, slot, reds)
+		same = same and ha.ordinary_points == hb.ordinary_points and ha.double_hit_points == hb.double_hit_points \
+			and ha.color_streak_points == hb.color_streak_points and ha.points == hb.points + ha.hot_points
+		hot_sum += ha.hot_points
+		doubles += ha.double_hit_points
+	check(same and hot_sum > 0 and doubles > 0,"hot points stay out of ordinary, double-hit and colour bonuses")
+	check(on.score == off.score + hot_sum and on.hot == 12 and off.hot == 0, "hot points are added on top of the total")
+	check(not off.hit(2, 20.0, 0, Vector2i(5, 5), reds).ignited, "no hot streak where it is switched off")
+
 	print("FAILED: %d" % failed if failed else "all passed")
 	quit(1 if failed else 0)

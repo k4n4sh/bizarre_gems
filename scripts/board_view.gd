@@ -46,6 +46,8 @@ void fragment() {
 const GOLD := Color(1.0, 0.84, 0.4)
 const BEAM := Color(0.97, 0.89, 0.66)
 const MISS := Color(1.0, 0.36, 0.31)
+const BLINK := 0.14  ## seconds a knocked-out gem flares white
+const EMBERS: Array[Color] = [Color("#ff5a1f"), Color("#ff9a2e"), Color("#ffd04d")]
 const TEXT_COLORS: Array[Color] = [Color(0.97, 0.89, 0.66), Color(1.0, 0.78, 0.35), Color(1.0, 0.55, 0.3), Color(1.0, 0.42, 0.7)]
 var frame_pad := 10.0
 
@@ -93,6 +95,10 @@ var _shake_off := Vector2.ZERO
 var _shards: Array[Dictionary] = []
 var _pops: Array[Dictionary] = []
 var _praise: Array[Dictionary] = []
+var _blinks: Array[Dictionary] = []  ## knocked-out gems flaring white for a moment before they burst
+## Hot streak on the board: 0 off, 1 on fire, 2 hotter. Embers rise from the bottom edge.
+var fire := 0
+var _ember_t := 0.0
 var _hue_mat := ShaderMaterial.new()
 ## "classic": faceted gems in round hollows on velvet; "bright": glossy tiles, colour shifts.
 var skin := "classic":
@@ -150,6 +156,7 @@ var _clear_t := 99.0  ## time since a full clear: a wave of light sweeps over th
 const JOKER_TEX := preload("res://assets/tiles/joker.png")
 const BOX_TEX := preload("res://assets/tiles/box.png")
 var _glow := 0.0
+var _glow_color := Color.WHITE
 var _slot_tex: Texture2D = SLOT_TEX
 var _colors: Array[Color] = CLASSIC_COLORS
 var hue := 0.0:
@@ -307,7 +314,7 @@ func _deal_scale(i: int) -> float:
 func clear_fx() -> void:
 	feedback_rects.clear()
 	_flyers.clear(); _beams.clear(); _texts.clear(); _misses.clear(); _sparks.clear(); _waves.clear()
-	_shards.clear(); _pops.clear(); _praise.clear(); _confetti.clear()
+	_shards.clear(); _pops.clear(); _praise.clear(); _confetti.clear(); _blinks.clear()
 	_flash = 0.0
 	_hint = Vector2i(-1, -1)
 	tutorial_focus = Vector2i(-1,-1)
@@ -330,6 +337,7 @@ func play_knock(from: Vector2i, gone: Array[Vector2i], kinds: Array[int], points
 	var c := slot_center(from)
 	for i in gone.size():
 		var h := slot_center(gone[i])
+		_blinks.append({"p": h, "k": kinds[i], "t": 0.0})
 		_beams.append({"a": c, "b": h, "t": 0.0, "rainbow": rainbow, "w": 1.0 + (mult - 1) * 0.5})
 		if _refined():
 			_beams[-1].rainbow = false
@@ -477,9 +485,10 @@ func play_confetti(count := 60) -> void:
 			"c": _colors[randi() % _colors.size()].lightened(0.15), "t": 0.0, "ph": randf() * TAU})
 
 
-## Make the board frame flash.
-func glow(strength := 1.0) -> void:
+## Make the board frame flash (in a colour: the combo's, gold for a record).
+func glow(strength := 1.0, color := Color.WHITE) -> void:
 	_glow = maxf(_glow, strength)
+	_glow_color = color
 
 
 func praise(text: String, at: Vector2i, color: Color, big := 1.0) -> void:
@@ -525,6 +534,13 @@ func _process(delta: float) -> void:
 	_age(_misses, delta, 0.45)
 	_age(_waves, delta, 0.6)
 	_age(_pops, delta, 0.22)
+	_age(_blinks, delta, BLINK)
+	if fire > 0 and logic:
+		_ember_t -= delta
+		while _ember_t <= 0.0:
+			_ember_t += (0.1 if _refined() else 0.05) / fire
+			_ember()
+		_trim_refined_fx()
 	_glow = maxf(0.0, _glow - delta * 1.5)
 	_clear_t += delta
 	if not _confetti.is_empty():
@@ -562,6 +578,17 @@ func _process(delta: float) -> void:
 		queue_redraw()
 	_hint_t += delta
 	_fx.queue_redraw()
+
+
+## One ember rising from the bottom edge of the board (hot streak).
+func _ember() -> void:
+	var gs := Vector2(logic.cols, logic.rows) * cell
+	var p := origin + Vector2(randf() * gs.x, gs.y + frame_pad * 0.5)
+	var col: Color = EMBERS[randi() % EMBERS.size()]
+	if fire >= 2 and randf() < 0.3:
+		col = Color("#bfe6ff")
+	_sparks.append({"p": p, "v": Vector2(randf_range(-0.4, 0.4) * cell, -cell * randf_range(4.0, 8.0) * (1.0 + fire * 0.3)),
+		"t": 0.0, "life": randf_range(0.5, 0.9), "s": randf_range(0.12, 0.24) if _refined() else randf_range(0.2, 0.42), "c": col})
 
 
 func _age(list: Array[Dictionary], delta: float, life: float) -> void:
@@ -717,6 +744,11 @@ func _draw_fx() -> void:
 		c.draw_set_transform(f.p + off, f.r)
 		c.draw_texture_rect(_tex(f.k), Rect2(-Vector2.ONE * gem / 2, Vector2.ONE * gem), false)
 	c.draw_set_transform(off)
+	for bl in _blinks:  # the gem itself, swelling and burning white, then gone
+		var q: float = bl.t / BLINK
+		var bs := gem * (1.0 + 0.3 * q)
+		c.draw_texture_rect(_tex(bl.k), Rect2(bl.p - Vector2.ONE * bs / 2, Vector2.ONE * bs), false,
+			Color(3.0, 3.0, 3.0, 1.0 - q * q))
 	for pp in _pops:
 		var q: float = pp.t / 0.22
 		c.draw_circle(pp.p, cell * (0.3 + q * 0.35), Color(1, 1, 1, (1.0 - q) * 0.75))
@@ -752,12 +784,14 @@ func _draw_fx() -> void:
 				continue
 			var q: float = pr.t / 1.1
 			var a: float = clampf((1.0 - q) * 2.5, 0.0, 1.0)
-			var pop: float = 1.0 + 0.5 * maxf(0.0, 1.0 - pr.t / 0.12)
+			var pop: float = 1.0 - exp(-pr.t * 13.0) * cos(pr.t * 24.0)  # springs in past full size, settles
 			var fs := int(maxf(26.0, cell * 0.9) * pr.k * pop)
+			if fs < 4:
+				continue  # the first frame of the spring
 			if _refined():
 				fs = mini(fs, int(maxf(22.0, cell * .65)))
 			var w := maxf(size.x, cell * 8)
-			var pos: Vector2 = Vector2(clampf(pr.p.x - w / 2, -w / 2 + size.x / 2, size.x / 2 - w / 2), pr.p.y - cell * 0.8 - q * cell * 1.8)
+			var pos: Vector2 = Vector2(clampf(pr.p.x - w / 2, -w / 2 + size.x / 2, size.x / 2 - w / 2), pr.p.y - cell * 0.8 - maxf(0.0, q - 0.3) * cell * 2.6)
 			c.draw_string_outline(number_font, pos, pr.s, HORIZONTAL_ALIGNMENT_CENTER, w, fs, 2 if _refined() else int(fs * 0.22), Color(0.05, 0.05, 0.15, a))
 			c.draw_string(number_font, pos, pr.s, HORIZONTAL_ALIGNMENT_CENTER, w, fs, Color(pr.c, a))
 	_draw_classic_feedback()
@@ -782,7 +816,14 @@ func _draw_fx() -> void:
 	if _glow > 0.0:
 		var gs := Vector2(logic.cols, logic.rows) * cell
 		var fr := Rect2(origin - Vector2.ONE * frame_pad, gs + Vector2.ONE * frame_pad * 2)
-		c.draw_rect(fr.grow(2.0), Color(LIGHT_FX, _glow * .5) if _refined() else Color(1, 1, 1, _glow * 0.8), false, (2.0 if _refined() else 4.0) + _glow * 4.0)
+		# classic_run keeps its soft light frame unless a colour (combo, record) is asked for
+		var gc := LIGHT_FX if _refined() and _glow_color == Color.WHITE else _glow_color
+		c.draw_rect(fr.grow(2.0), Color(gc, _glow * (.5 if _refined() else 0.8)), false, (2.0 if _refined() else 4.0) + _glow * 4.0)
+	if fire > 0:
+		var gs2 := Vector2(logic.cols, logic.rows) * cell
+		var fr2 := Rect2(origin - Vector2.ONE * frame_pad, gs2 + Vector2.ONE * frame_pad * 2)
+		var fa := (0.22 + 0.1 * sin(_time * 11.0) + 0.06 * sin(_time * 29.0)) * (.6 if _refined() else 1.0)
+		c.draw_rect(fr2.grow(1.0), Color(EMBERS[1] if fire == 1 else EMBERS[2], fa * fire), false, 2.0 if _refined() else 3.0)
 	if _flash > 0.0:
 		c.draw_set_transform(Vector2.ZERO)
 		var grid_size := Vector2(logic.cols, logic.rows) * cell

@@ -17,7 +17,7 @@ func _rules() -> void:
 	for hit in range(1, 31):
 		var r := k.hit(2, float(hit))
 		var mult := 4 if hit >= 9 else (3 if hit >= 5 else (2 if hit >= 2 else 1))
-		check(r.mult == mult and r.points == 2 * mult, "pair %d: unchanged points and tier threshold" % hit)
+		check(r.mult == mult and r.points - r.hot_points == 2 * mult, "pair %d: unchanged points and tier threshold" % hit)
 		check(r.time == (1.0 if hit in [2, 5, 9, 10, 20, 30] else 0.0), "pair %d: exact seconds" % hit)
 		check(r.tier_up == (hit in [2, 5, 9]), "pair %d: tier awarded once" % hit)
 		seconds += r.time

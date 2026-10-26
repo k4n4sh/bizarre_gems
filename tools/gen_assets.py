@@ -798,7 +798,31 @@ def make_bright_sounds(rng):
     a = arpeggio((1047, 1319, 1568, 2093, 2637, 3136), .09, 1.2, .5, .22); x[:min(n, len(a))] += a[:min(n, len(a))]
     g = shimmer(rng, 1.8, .14); x[:len(g)] += g
     write_sfx(A("audio", "b_clear.wav"), np.tanh(x * 1.3) * .8)
+    make_retention_sounds(rng)
 
+
+def crackle(rng, dur, rate=60, vol=.25):
+    """Fire crackle: sparse sharp clicks over a soft hiss."""
+    n = int(SR * dur); x = rng.normal(0, 1, n) * .04 * vol
+    for _ in range(int(dur * rate)):
+        o = rng.integers(0, n - 200); k = rng.integers(40, 200)
+        x[o:o + k] += rng.normal(0, 1, k) * np.exp(-np.arange(k) / (k * .2)) * vol * rng.uniform(.3, 1)
+    return x
+
+
+def make_retention_sounds(rng):
+    """New record (a bright fanfare with a thump and glitter), the hot streak catching fire
+    (a whoosh into crackle) and going out (a falling hiss)."""
+    fan = [(fm_ding(f, .7, .28), .05 + i * .06) for i, f in enumerate((523, 659, 784, 1047, 1319, 1568))]
+    chord = [(fm_ding(f, 1.4, .22), .45) for f in (1047, 1319, 1568, 2093)]
+    x = _mix((whoosh(.4, 300, 7000, .25, 11), 0), (_kick(), .45), *fan, *chord, (shimmer(rng, 1.8, .14), .45))
+    write_sfx(A("audio", "b_record.wav"), np.tanh(x * 1.2) * .8)
+    n = int(SR * .9)
+    cr = crackle(rng, .9) * np.minimum(np.arange(n) / (SR * .12), 1) * np.exp(-np.arange(n) / (SR * .4))
+    write_sfx(A("audio", "b_fire.wav"), _mix((whoosh(.35, 150, 2500, .35, 13), 0), (cr, .1), (fm_ding(784, .4, .18), .12)))
+    n = int(SR * .6); t = np.arange(n) / SR
+    hiss = whoosh(.6, 3000, 200, .3, 17) * np.exp(-t / .25)
+    write_sfx(A("audio", "b_fire_out.wav"), _mix((hiss, 0), (marimba(330, .3, .15), .02), (marimba(247, .35, .15), .1)))
 
 
 def _kick():

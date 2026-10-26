@@ -18,6 +18,10 @@ func freeze(main) -> void:
 	main.board._hover = Vector2i(-1,-1)
 	main.board._fx.visible = false
 	main.board.refresh()
+	var bar: RecordBar = main.record_bar  # its fill eases in: settle it like the board
+	bar.set_process(false)
+	bar._fill = 1.0 if bar.beaten or bar.best <= 0 else clampf(float(bar.score) / bar.best, 0.0, 1.0)
+	bar.queue_redraw()
 	main.ambient.set_process(false)
 	main.ambient._pulse = 0
 	main.ambient._classic_mat.set_shader_parameter("pulse", 0.0)

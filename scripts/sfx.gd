@@ -28,6 +28,8 @@ const BRIGHT := {
 	"over": preload("res://assets/audio/b_over.wav"), "tick": preload("res://assets/audio/b_tick.wav"),
 	"star": preload("res://assets/audio/b_star.wav"), "hint": preload("res://assets/audio/b_hint.wav"),
 	"level": preload("res://assets/audio/b_level.wav"), "clear": preload("res://assets/audio/b_clear.wav"),
+	"record": preload("res://assets/audio/b_record.wav"), "fire": preload("res://assets/audio/b_fire.wav"),
+	"fire_out": preload("res://assets/audio/b_fire_out.wav"),
 }
 
 var skin := "classic"

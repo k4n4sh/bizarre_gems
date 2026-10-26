@@ -310,3 +310,23 @@ lesson_clock_wait,Время заканчивается. В обоих режи�
 lesson_clock_result,"Готово! Продолжение: +15 с за рекламу один раз. Подсказка: первая бесплатна, затем жетон или реклама.","Done! One ad continuation: +15 s. First hint free, then a token or ad.","Tamam! Reklamla bir kez +15 sn. İlk ipucu ücretsiz, sonra jeton veya reklam."
 pay_double_hit,Двойной удар: второе удаление подряд из той же клетки даёт +50% обычных очков; затем цикл начинается заново.,Double hit: the second removal in a row from the same slot adds 50% of ordinary points; then the cycle starts again.,Çifte vuruş: aynı hücreden art arda ikinci kaldırma normal puanın %50’sini ekler; sonra döngü yeniden başlar.
 pay_color_chain,"Цветная цепочка: минимум 2 камня одного цвета за удар. Первый бонус оплачивает доли двух ударов, следующие — только новые доли. Джокер учитывается как выбранный цвет.",Colour chain: remove at least 2 gems of one colour per strike. The first bonus pays the colour shares of both strikes; later bonuses pay only new shares. A joker counts as its matched colour.,"Renk zinciri: vuruş başına aynı renkten en az 2 taş kaldır. İlk bonus iki vuruşun renk paylarını, sonraki bonuslar yalnızca yeni payları öder. Joker eşleştiği renk sayılır."
+record_first,Поставь первый рекорд!,Set your first record!,İlk rekorunu koy!
+record_new,НОВЫЙ РЕКОРД!,NEW BEST!,YENİ REKOR!
+record_label,Рекорд {n},Best {n},Rekor {n}
+record_left,ещё {n},{n} to go,{n} kaldı
+record_sub,Прошлый рекорд: {n},Previous best: {n},Önceki rekor: {n}
+near_best,Не хватило всего {n} до рекорда!,Just {n} short of your best!,Rekora sadece {n} puan kaldı!
+on_fire,В ударе!,On fire!,Alev aldın!
+fire_out,Огонь погас: {n} без промахов,Fire's out: {n} without a miss,Ateş söndü: {n} hatasız vuruş
+best_hot,Без промахов подряд: {n},No-miss run: {n},Hatasız seri: {n}
+warmup,Разминка: +{n} с,Warm-up: +{n} s,Isınma: +{n} sn
+warmup_steps,Разминка: +{n} шагов,Warm-up: +{n} moves,Isınma: +{n} hamle
+praise_1,Хорошо!,Good!,İyi!
+praise_2,Отлично!,Great!,Harika!
+praise_3,Супер!,Super!,Süper!
+praise_4,Великолепно!,Excellent!,Mükemmel!
+praise_5,Невероятно!,Incredible!,İnanılmaz!
+praise_6,Легендарно!,Legendary!,Efsane!
+home_first,Поставь первый рекорд!,Set your first record!,İlk rekorunu koy!
+home_level,Уровень {n},Level {n},Seviye {n}
+daily_new_in,Новое через {t},New one in {t},Yenisi {t} sonra

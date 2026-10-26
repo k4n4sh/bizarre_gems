@@ -7,6 +7,10 @@ extends RefCounted
 ##
 ## Legacy special combo is consecutive 3+ hits. Classic and Bright Run opt into timed_special:
 ## 5 seconds per 3+ hit; pairs extend by 0.5 seconds; Perfect ends the cycle.
+##
+## Hot streak: strikes in a row without a miss, however slow. From HOT_AT on the streak is on
+## fire and every strike scores extra; only a miss puts it out (a combo timeout does not).
+## Hot points are added after every other bonus and never feed ordinary_points.
 
 const COMBO_WINDOW := 3.0  ## Legacy/non-Classic default.
 const CLASSIC_COMBO_WINDOW := 3.5
@@ -31,6 +35,9 @@ const COLOR_STREAK_BONUS := 1.0
 const COLOR_STREAK_MIN_GEMS := 2  ## A color must contribute at least a pair to participate.
 ## combo length -> multiplier (first entry whose length is reached, checked from the top)
 const TIERS := [[9, 4], [5, 3], [2, 2], [0, 1]]
+const HOT_AT := 5        ## strikes in a row without a miss that set the streak on fire
+const HOT_POINTS := 3    ## extra points per strike on fire, for every HOT_AT in the streak...
+const HOT_MAX_STEPS := 4  ## ...up to this many (5: +3, 10: +6, 15: +9, 20+: +12)
 
 ## Extra seconds for combos, streaks, precise/perfect combos and shining gems. Bright mode
 ## turns them off; its time economy comes from completed boards.
@@ -59,6 +66,10 @@ var perfect_events := 0
 var special_bonus_points := 0
 var special_bonus_time := 0.0
 var _special_deadline := -1.0
+var hot_streak := true  ## false: no hot streak at all (the tutorial keeps its lessons' arithmetic)
+var hot := 0
+var best_hot := 0
+var lost_hot := 0  ## the streak the last miss put out
 var _last_hit := -1000.0
 
 
@@ -96,6 +107,9 @@ func reset() -> void:
 	special_bonus_points = 0
 	special_bonus_time = 0.0
 	_special_deadline = -1.0
+	hot = 0
+	best_hot = 0
+	lost_hot = 0
 	_last_hit = -1000.0
 	reset_bonus_combos()
 
@@ -107,10 +121,10 @@ func window_left(now: float) -> float:
 	return maxf(0.0, combo_window - (now - _last_hit))
 
 
-## Call every frame. Returns true when the combo just ran out.
+## Call every frame. Returns true when the combo just ran out. A timeout keeps the hot streak.
 func update(now: float) -> bool:
 	if combo > 0 and now - _last_hit > combo_window:
-		return miss()
+		return _break_combo()
 	if timed_special and precise_streak > 0 and now >= _special_deadline:
 		_reset_special()
 	return false
@@ -125,8 +139,20 @@ func _reset_special() -> void:
 	_special_deadline = -1.0
 
 
-## Returns true when a running combo (2+) was broken.
+static func hot_bonus(streak: int) -> int:
+	return HOT_POINTS * mini(streak / HOT_AT, HOT_MAX_STEPS)
+
+
+## A missed strike. Returns true when a running combo (2+) was broken. The hot streak goes
+## out too (see lost_hot).
 func miss() -> bool:
+	lost_hot = hot
+	hot = 0
+	return _break_combo()
+
+
+## Combo, special combo and bonus chains end; the hot streak is left alone.
+func _break_combo() -> bool:
 	var had := combo >= 2
 	if had:
 		combo_breaks += 1
@@ -193,7 +219,7 @@ func _color_streak_for_hit(ordinary_points: int, removed_kinds: Array[int]) -> D
 
 ## A successful strike that knocked out n gems, `shining` of them shining gems.
 ## Slot and actually removed kinds are required for Classic bonus combos.
-## Bonus points use only ordinary_points, excluding special/shining/other rewards.
+## Bonus points use only ordinary_points, excluding special/shining/hot/other rewards.
 func hit(n: int, now: float, shining := 0, slot := Vector2i(-1, -1), removed_kinds: Array[int] = []) -> Dictionary:
 	update(now)  # Expire both clocks before a hit can refresh or extend them.
 	var old_mult := multiplier_for(combo)
@@ -263,8 +289,15 @@ func hit(n: int, now: float, shining := 0, slot := Vector2i(-1, -1), removed_kin
 		else:
 			reset_bonus_combos()  # No removal cannot prime or earn these bonuses.
 	points += double_hit_points + color_streak_points
+	var hot_points := 0
+	if hot_streak:
+		hot += 1
+		best_hot = maxi(best_hot, hot)
+		hot_points = hot_bonus(hot)
+	points += hot_points
 	score += points
 	return {"points": points, "ordinary_points": ordinary_points, "double_hit_points": double_hit_points,
 		"color_streak_points": color_streak_points, "color_streak_started": color_streak_started,
 		"time": time, "combo": combo, "mult": mult,
-		"tier_up": mult > old_mult, "event": event, "shine": shining}
+		"tier_up": mult > old_mult, "event": event, "shine": shining,
+		"hot": hot, "hot_points": hot_points, "ignited": hot_streak and hot == HOT_AT}

@@ -34,6 +34,12 @@ const BOMB_TIME := 5.0    ## a bomb going off costs this many seconds (steps mod
 const BOMB_STEPS := 3
 const DEFUSE_POINTS := 10
 const PENTA := [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24]  ## combo knocks climb this scale
+## false: praise for a new multiplier (x3 "Super", x4 "Wow"); true: the ladder below instead.
+const PRAISE_LADDER := true
+## Praise climbs a ladder as the combo grows: the combo lengths that earn praise_1, praise_2, ...
+## (past the last one, every 5th strike repeats the top word).
+const PRAISE_AT := [3, 5, 7, 9, 12, 15]
+const PRAISE_COLORS := [Color("#9fe3ff"), Color("#7dff9a"), Color("#ffe066"), Color("#ffad42"), Color("#ff6fb5"), Color("#d79bff")]
 
 ## Palettes the screen cycles through on big combos and new boards (background top/bottom).
 const SPECIAL_BANNER_SECONDS := 0.75
@@ -130,6 +136,10 @@ var _game_generation := 0
 var _ad_request := 0
 var _ad_pending := false
 var _hud_safe_poll := 0.0
+var best_start := 0        ## the record when this game started: the race the record bar shows
+var record_beaten := false
+var record_bar: RecordBar
+var fly: FlyLayer
 
 # ---- nodes of scenes/main.tscn ----
 @onready var ambient: Ambient = $Ambient
@@ -191,6 +201,12 @@ func _ready() -> void:
 	board.feedback_exclusion = _feedback_exclusion
 	board.logic = logic
 	game_layer.get_node("Column").resized.connect(_layout_game)
+	record_bar = RecordBar.new()
+	board.get_parent().add_child(record_bar)  # placed by the column layout, above the board
+	fly = FlyLayer.new()
+	add_child(fly)
+	move_child(fly, dim.get_index())  # over the board, under the menus
+	fly.landed.connect(func(): hud.pop(hud.score_label, 1.2))
 	_connect_screens()
 	_apply_ui_scale()
 	_set_orientation(false)
@@ -311,6 +327,7 @@ func _navigate(to: StringName) -> void:
 
 
 ## Debug builds: ?start=map|tasks|coll|leaders|settings|more|challenge|pause|over|cover|lres|zen|bright|classic|levelN opens that screen directly.
+## ?best=N sets the records first (not saved unless a game beats them), ?t=N the time left.
 func _debug_start() -> void:
 	if OS.is_debug_build() and ComboExperiment.is_read_only():
 		start_game(ComboExperiment.target_mode)
@@ -318,6 +335,11 @@ func _debug_start() -> void:
 	if not (OS.is_debug_build() and OS.has_feature("web")):
 		return
 	var q := str(JavaScriptBridge.eval("new URLSearchParams(location.search).get('start') || ''"))
+	var fake_best := str(JavaScriptBridge.eval("new URLSearchParams(location.search).get('best') || ''"))
+	if fake_best != "":  # ?best=N: a record to race (and the near-miss line on the result)
+		Save.best = int(fake_best)
+		Save.best_bright = int(fake_best)
+		Save.best_zen = int(fake_best)
 	var direct := {"tasks": &"tasks", "coll": &"collection", "gift": &"gift", "ach": &"achievements", "stats": &"stats",
 		"more": &"more", "modes": &"modes"}
 	if q in ["map","pmap","zen","puzzle","lres"] or q.begins_with("level"):
@@ -418,6 +440,7 @@ func start_game(mode_id := "", is_daily := false, ch := {}) -> void:
 	challenge = ch.duplicate(true)
 	game_seed = int(ch.seed) if not ch.is_empty() else (ComboExperiment.board_seed if ComboExperiment.is_read_only() else int(rng.randi()))
 	_use_mode(mode_id if mode_id != "" else str(Save.mode))
+	record_bar.visible = mode.kind != "tutorial"  # before any layout: the strip takes room above the board
 	if not ComboExperiment.is_read_only() and Save.mode != mode.id and mode.id in ["classic", "bright", "zen", "levels", "puzzle"]:
 		Save.mode = mode.id  # the tutorial and the daily challenge don't become "last mode"
 		Save.store()
@@ -458,6 +481,12 @@ func start_game(mode_id := "", is_daily := false, ch := {}) -> void:
 	score = 0
 	shown_score = 0.0
 	keeper.reset()
+	var has_race: bool = mode.kind in ["classic", "run"]
+	best_start = Save.daily_best_for(daily_run_date) if daily else Save.best_for(mode.id)
+	record_beaten = false
+	record_bar.setup(best_start if has_race else 0, has_race)
+	board.fire = 0
+	fly.clear()
 	play_time = 0.0
 	hud.set_combo(0)
 	cleared = 0
@@ -564,6 +593,7 @@ func _configure_keeper() -> void:
 		ComboExperiment.window_seconds() if experiment else ScoreKeeper.CLASSIC_COMBO_WINDOW,
 		ComboExperiment.special_rules == "timed" if experiment else true)
 	keeper.time_bonuses = mode.kind == "classic" or (mode.kind == "tutorial" and not _run_time_rules())
+	keeper.hot_streak = mode.kind != "tutorial"
 
 
 ## Lay out a board for the current mode. The daily board uses the mode's fixed shape and a
@@ -976,6 +1006,7 @@ func pause_game() -> void:
 	if state != State.PLAYING:
 		return
 	state = State.PAUSED
+	Engine.time_scale = 1.0
 	board.interactive = false
 	Yandex.gameplay(false)
 	show_screen(pause)
@@ -1003,6 +1034,9 @@ func go_menu() -> void:
 		Yandex.gameplay(false)
 	state = State.MENU
 	board.interactive = false
+	board.fire = 0
+	Engine.time_scale = 1.0
+	fly.clear()
 	show_screen(home)
 
 
@@ -1028,6 +1062,8 @@ func end_game(reason: String) -> void:
 	state = State.OVER
 	end_reason = reason
 	board.interactive = false
+	board.fire = 0
+	Engine.time_scale = 1.0
 	Yandex.gameplay(false)
 	var is_best := false
 	if ComboExperiment.is_read_only():
@@ -1050,9 +1086,16 @@ func end_game(reason: String) -> void:
 		last_earned = maxi(earned, 0) + daily_paid
 	_report_progress("games_" + mode.id)
 	_report_progress("max_combo", keeper.best_combo)
+	_report_progress("max_hot", keeper.best_hot)
 	_report_progress("play_secs", int(play_time))
 	Progress.flush()
 	var line := L.t("cleared", {"n": cleared, "w": wave}) + "\n" + L.t("stats", {"combo": keeper.best_combo, "precise": keeper.precise_count})
+	if keeper.best_hot >= ScoreKeeper.HOT_AT:
+		line += "\n" + L.t("best_hot", {"n": keeper.best_hot})
+	# just short of the record: say by how much, so "again" is hard to resist
+	var near_n := 0
+	if not is_best and best_start > 0 and score > 0 and (best_start - score) * 5 <= best_start:
+		near_n = best_start - score + 1
 	if daily:
 		line = L.t("daily") + " · " + L.t("daily_best", {"n": Save.daily_best_for(daily_run_date)}) + "\n" + line
 	if not challenge.is_empty():
@@ -1062,11 +1105,13 @@ func end_game(reason: String) -> void:
 		"localization": {"title":"stuck" if reason == "stuck" else ("no_strikes" if reason == "strikes" else "times_up"),
 			"new_best":("new_daily_best" if daily else "new_best") if is_best and score > 0 else "",
 			"cleared":cleared,"wave":wave,"combo":keeper.best_combo,"precise":keeper.precise_count,
-			"daily":daily,"daily_best":Save.daily_best_for(daily_run_date) if daily else 0,"target":int(challenge.score) if not challenge.is_empty() else -1},
+			"daily":daily,"daily_best":Save.daily_best_for(daily_run_date) if daily else 0,"target":int(challenge.score) if not challenge.is_empty() else -1,
+			"near":near_n,"best_hot":keeper.best_hot if keeper.best_hot >= ScoreKeeper.HOT_AT else 0},
 		"title": L.t("stuck" if reason == "stuck" else ("no_strikes" if reason == "strikes" else "times_up")),
 		"score": score,
 		"new_best": L.t("new_daily_best" if daily else "new_best") if is_best and score > 0 else "",
 		"line": line,
+		"near": L.t("near_best", {"n": near_n}) if near_n > 0 else "",
 		"reward": last_earned,
 		"can_continue": reason == "time" and not used_continue and mode.kind != "zen",
 		"can_shuffle": reason == "stuck" and not used_shuffle and logic.gems_left() > 1,
@@ -1108,6 +1153,10 @@ func _on_slot(p: Vector2i) -> void:
 		Haptics.buzz("miss")
 		if keeper.miss():
 			_combo_break()
+		board.fire = 0
+		if keeper.lost_hot >= ScoreKeeper.HOT_AT:
+			_toast(L.t("fire_out", {"n": keeper.lost_hot}))
+			Sfx.play("fire_out", 1.0, -3.0)
 		if _classic_time_rules() or _run_time_rules():
 			hud.flash_delta("−1", true)
 		_tick_obstacles(false)
@@ -1157,10 +1206,23 @@ func _on_slot(p: Vector2i) -> void:
 		Sfx.play("bonus")
 		board.play_burst(p, 14 * nshine, false)
 		ambient.pulse(Color(1.0, 0.84, 0.4), 0.5)
-	if n >= 4 and res.event == "":
+	var step := -1
+	if PRAISE_LADDER:
+		step = PRAISE_AT.find(res.combo)
+		if step < 0 and res.combo > PRAISE_AT[-1] and res.combo % 5 == 0:
+			step = PRAISE_AT.size() - 1
+	if step >= 0:
+		board.praise(L.t("praise_%d" % (step + 1)), p, PRAISE_COLORS[step], 1.0 + step * 0.12)
+	elif n >= 4 and res.event == "":
 		board.praise(L.t("praise_great"), p, UiKit.BRASS_LIGHT)
-	if res.tier_up and res.mult >= 3:
+	if not PRAISE_LADDER and res.tier_up and res.mult >= 3:
 		board.praise(L.t("praise_super" if res.mult == 3 else "praise_wow"), p, UiKit.COMBO_COLORS[res.mult - 1].lightened(0.35), 1.2)
+	if res.ignited:
+		if step < 0:
+			board.praise(L.t("on_fire"), p, Color("#ff9a2e"), 1.15)
+		Sfx.play("fire")
+		Haptics.buzz("tier")
+	board.fire = 0 if keeper.hot < ScoreKeeper.HOT_AT else (2 if keeper.hot >= ScoreKeeper.HOT_AT * 2 else 1)
 	# Hits still score when a box only cracks; removal counts use the destroyed gems.
 	cleared += vanish.size()
 	_note_best_strike(p, vanish, vkinds, res)
@@ -1186,6 +1248,7 @@ func _on_slot(p: Vector2i) -> void:
 			"receipt":res.duplicate(true),"score":score,"time_left":time_left})
 	var event: String = res.event
 	board.play_knock(p, vanish, vkinds, res.points, res.mult, event != "", res)
+	_send_sparks(vanish, vkinds)
 	if vanish.size() < gone.size():
 		board.shake(0.08)  # a box cracked
 	if mode.skin == "bright":
@@ -1205,6 +1268,9 @@ func _on_slot(p: Vector2i) -> void:
 		ambient.pulse(UiKit.BRASS, 0.4)
 		board.play_wave(p, 1.0)
 		board.shake(0.1)
+		board.glow(0.9, UiKit.COMBO_COLORS[clampi(res.mult, 1, 4) - 1])
+		if res.mult >= 3:
+			_hitstop(0.05)
 	if event == "precise":
 		if mode.skin == "bright":
 			Sfx.play("precise")
@@ -1213,6 +1279,7 @@ func _on_slot(p: Vector2i) -> void:
 		board.play_wave(p, 2.0, true)
 		board.play_burst(p, 40)
 		board.flash(UiKit.BRASS_LIGHT, 0.22)
+		_hitstop(0.06)
 		_banner(L.t("precise"), ScoreKeeper.PRECISE_POINTS, 0.0 if _run_time_rules() else ScoreKeeper.PRECISE_TIME, UiKit.BRASS_LIGHT, "", 2)
 		if mode.skin == "bright":
 			board.play_confetti(50)
@@ -1227,6 +1294,7 @@ func _on_slot(p: Vector2i) -> void:
 		board.play_burst(p, 90)
 		board.flash(Color.WHITE, 0.4)
 		board.shake(0.3)
+		_hitstop(0.09)
 		_banner(L.t("perfect"), ScoreKeeper.PERFECT_POINTS, 0.0 if _run_time_rules() else ScoreKeeper.PERFECT_TIME, Color("#ff9ed2"), "", 3)
 		_report_progress("perfects")
 		if mode.skin == "bright":
@@ -1869,6 +1937,10 @@ func _update_hud() -> void:
 	hud.set_number(hud.best_label, maxi(Save.best_for(mode.id), score))
 	if mode.kind == "tutorial": hud.best_label.text = "—"
 	hud.update_progress(keeper,play_time,state in [State.PLAYING,State.PAUSED],board,wave)
+	record_bar.score = score
+	record_bar.set_hot(keeper.hot)
+	if state == State.PLAYING and record_bar.race and best_start > 0 and not record_beaten and score > best_start:
+		_record_broken()
 	hud.set_buttons(state == State.PLAYING, state == State.PLAYING or state == State.PAUSED)
 	var bright: Hud = huds.bright
 	if mode.kind != "run":
@@ -1882,6 +1954,37 @@ func _update_hud() -> void:
 	if mode.kind == "tutorial":
 		bright.btn_hint.disabled = tut_waiting or tut_clock_running or dealing
 		bright.btn_hint.tooltip_text = L.t("lesson_help")
+
+
+## The score just passed the record, mid-game: make a moment of it.
+func _record_broken() -> void:
+	record_beaten = true
+	record_bar.celebrate()
+	_banner(L.t("new_daily_best" if daily else "new_best"), 0, 0.0, UiKit.BRASS, L.t("record_sub", {"n": best_start}))
+	var mid := Vector2i(logic.cols / 2, logic.rows / 2)
+	board.play_confetti(120)
+	board.play_burst(mid, 60)
+	board.glow(1.0, UiKit.BRASS)
+	board.flash(UiKit.BRASS_LIGHT, 0.3)
+	ambient.pulse(UiKit.BRASS, 1.0)
+	Sfx.play("record")
+	Haptics.buzz("perfect")
+	_hitstop(0.12)
+
+
+## Sparks fly from the knocked-out gems to the score (a few, not one per gem).
+func _send_sparks(gone: Array[Vector2i], kinds: Array[int]) -> void:
+	var to := hud.score_label.get_global_rect().get_center()
+	var bt := board.get_global_transform()
+	var sz := clampf(board.cell * 0.8, 14.0, 30.0)
+	for i in mini(gone.size(), 6):
+		fly.send(bt * board.slot_center(gone[i]), to, board._col(kinds[i]), i * 0.035, sz)
+
+
+## Freeze the game for a blink on a big moment, so the hit lands.
+func _hitstop(secs: float) -> void:
+	Engine.time_scale = 0.05
+	get_tree().create_timer(secs, true, false, true).timeout.connect(func(): Engine.time_scale = 1.0)
 
 
 func _toast(text: String) -> void:
@@ -2016,6 +2119,7 @@ func _on_viewport_resized() -> void:
 			p.theme_type_variation = &"PanelCompact" if compact else &""
 		p.layout(s, compact)
 	board.frame_pad = 3.0 if mode.id == "classic" and _is_native_android() else (5.0 if compact else 10.0)
+	record_bar.custom_minimum_size.y = 30.0 if compact else 36.0
 	if mode.id == "classic" and _is_native_android():
 		# Refinement centres both rails on the full screen; the cell/rail calculation
 		# reserves horizontal cutouts. Vertical margins use the larger safe inset.
@@ -2144,7 +2248,7 @@ func _layout_game() -> void:
 	if mode.kind == "tutorial":
 		column.arrange_practice(board,hud,practice)
 	else:
-		column.arrange(board,hud,mode.id,_is_native_android(),get_viewport_rect().size,safe)
+		column.arrange(board,hud,mode.id,_is_native_android(),get_viewport_rect().size,safe,record_bar)
 
 
 func _fit_banner_text() -> void:

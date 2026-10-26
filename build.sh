@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 GODOT=${GODOT:-godot}
+tools/lint.sh
 rm -rf build/web && mkdir -p build/web
 "$GODOT" --headless --audio-driver Dummy --path . --import >/dev/null 2>&1 || true
 "$GODOT" --headless --audio-driver Dummy --path . --script res://tests/test_logic.gd
