@@ -5,6 +5,7 @@ extends Control
 const STRIP_GAP := 6.0
 const TOP_HEIGHT := 76.0  ## Classic top plates (desktop/web)
 const TOP_GAP := 10.0
+const RUN_ROW_MIN := 1100.0  ## Run's top row: five buttons, three plates
 const TOP_MARGIN := 0.0  ## plates sit almost at the top edge (the game layer already has a small inset)
 
 func arrange_practice(board: BoardView, hud: Hud, card: PanelContainer) -> void:
@@ -54,8 +55,10 @@ func arrange(board: BoardView, hud: Hud, mode_id: String, android: bool,
 		hud.layout_sides(board.get_rect(), view, insets)
 		_place_strip(strip, board)
 		return
-	if mode_id == "classic" and hud.plates:
-		_arrange_top(board, hud, strip)
+	# The top row needs a landscape window; narrow/portrait browsers keep the compact header.
+	var wide := size.x > size.y and size.x >= 760
+	if hud.plates and wide and (mode_id == "classic" or (mode_id == "bright" and not android)):
+		_arrange_top(board, hud, strip, mode_id == "bright")
 		return
 	var run := mode_id == "bright"
 	var reservation := (148.0 if hud.skin == "bright" else 74.0) + strip_room
@@ -94,11 +97,12 @@ func _place_strip(strip: Control, board: BoardView) -> void:
 	strip.modulate.a = 1.0 if strip.position.y >= 0 else 0.0
 
 
-## Classic on desktop/web: plates right above the field frame, the record bar inside the
-## middle plate, and room on both sides for the button columns.
-func _arrange_top(board: BoardView, hud: Hud, strip: Control) -> void:
+## Classic and Bright Run on desktop/web: plates right above the field frame, the record bar
+## inside the middle plate. Classic keeps room on both sides for the buttons; the long Run
+## field spans the width and its buttons sit inside the row.
+func _arrange_top(board: BoardView, hud: Hud, strip: Control, buttons_inside := false) -> void:
 	var plate_h := TOP_HEIGHT
-	var room := hud.top_side_room(plate_h)
+	var room := 0.0 if buttons_inside else hud.top_side_room(plate_h)
 	var top := TOP_MARGIN
 	# The board rect keeps room for the frame shadow (the board clips its contents).
 	var shade := maxf(0, board.frame_shadow() - board.frame_pad)
@@ -106,11 +110,18 @@ func _arrange_top(board: BoardView, hud: Hud, strip: Control) -> void:
 	board.position = Vector2(room - shade, top + plate_h + TOP_GAP - shade)
 	board.size = Vector2(maxf(1, size.x - (room - shade) * 2), maxf(1, size.y - board.position.y))
 	board.refresh()
+	# A field limited by width would float in the middle: keep it right under the plates.
+	board.position.y = top + plate_h + TOP_GAP - board.origin.y + board.frame_pad
 	var frame := Vector2(board.logic.cols, board.logic.rows) * board.cell + Vector2.ONE * board.frame_pad * 2
 	var left := board.position.x + board.origin.x - board.frame_pad
 	hud.position = Vector2.ZERO
 	hud.size = size
-	var bar := hud.layout_top(Rect2(left, top, frame.x, plate_h))
+	var row := frame.x
+	if buttons_inside and frame.x < RUN_ROW_MIN:
+		# A narrow (e.g. upright Daily) field: the row may run past the frame, up to the window.
+		row = minf(RUN_ROW_MIN, size.x)
+		left = clampf(left + (frame.x - row) * 0.5, 0, size.x - row)
+	var bar := hud.layout_top(Rect2(left, top, row, plate_h), buttons_inside)
 	if strip and strip.visible:
 		if strip is RecordBar: strip.compact = true
 		strip.position = bar.position

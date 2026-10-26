@@ -52,6 +52,9 @@ func layout_contract(main, android: bool, label: String) -> void:
 	var frame := Rect2(main.board.position+main.board.origin-Vector2.ONE*main.board.frame_pad,
 		Vector2(main.logic.cols,main.logic.rows)*main.board.cell+Vector2.ONE*main.board.frame_pad*2)
 	var stats: Rect2 = main.hud.get_node("Stats").get_rect()
+	if main.hud.top_layout:
+		top_contract(main,frame,label)
+		return
 	check(main.hud.mode_id == "bright" and main.hud.run_badge.visible and not main.practice.visible,label+" real Run HUD, no practice")
 	if android: return # The accepted portrait arrangement is intentionally distinct.
 	check(stats.size.x == frame.size.x and stats.position.x == frame.position.x,label+" header measures actual field frame")
@@ -61,6 +64,18 @@ func layout_contract(main, android: bool, label: String) -> void:
 	check(is_equal_approx(stats.end.y+16+strip_room,frame.position.y),label+" header above actual field")
 	check(not strip.visible or (strip.position.y >= stats.end.y and is_equal_approx(strip.get_rect().end.y+6.0,frame.position.y)
 		and is_equal_approx(strip.position.x,frame.position.x)),label+" record bar between header and field")
+## Landscape web Run: one row of plates and buttons as wide as the field frame, just above it,
+## with the record bar inside the middle plate.
+func top_contract(main, frame: Rect2, label: String) -> void:
+	var hud = main.hud
+	var plates: Rect2 = hud.get_node("Plates/Time").get_rect().merge(hud.get_node("Plates/Streak").get_rect())
+	check(hud.mode_id == "bright" and not hud.run_badge.visible and hud.get_node("Stats/Combo/Streak").visible and not main.practice.visible,label+" real Run HUD with the combo plate, no practice")
+	var row: Rect2 = hud.btn_home.get_rect().merge(hud.btn_settings.get_rect())
+	check(row.position.x <= frame.position.x+1 and row.end.x >= frame.end.x-1 and row.position.x >= -1 and row.end.x <= main.board.get_parent().size.x+1,label+" top row spans the field frame, inside the window")
+	check(plates.end.y < frame.position.y and frame.position.y-plates.end.y <= 12,label+" top row just above the field")
+	var middle: Rect2 = hud.get_node("Plates/Score").get_rect()
+	var strip: Control = main.record_bar
+	check(not strip.visible or (middle.encloses(Rect2(strip.position,Vector2(strip.size.x,strip.COMPACT_HEIGHT)))),label+" record bar inside the middle plate "+str([middle,strip.get_rect()]))
 func badge_cycle(main, baseline: Dictionary, label: String) -> void:
 	for length in [2,5,9,12345,0]:
 		main.hud.set_combo(length,true)
@@ -68,7 +83,8 @@ func badge_cycle(main, baseline: Dictionary, label: String) -> void:
 		check(same_geometry(geometry(main),baseline),label+" badge pulse/appearance preserves reservations "+str(length))
 	main.hud.fade_combo()
 	await create_timer(.4).timeout
-	check(same_geometry(geometry(main),baseline) and main.hud.combo_box.modulate.a == 0,label+" fade preserves geometry")
+	var faded: bool = main.hud.combo_mult.text == "0" if main.hud.top_layout else main.hud.combo_box.modulate.a == 0
+	check(same_geometry(geometry(main),baseline) and faded,label+" fade preserves geometry")
 func resize_cycle(main, vp: SubViewport, baseline: Dictionary, label: String, physical_fullscreen: bool) -> void:
 	var original := vp.size
 	var cells: PackedInt32Array = main.logic.cells.duplicate()

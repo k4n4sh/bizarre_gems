@@ -9,6 +9,7 @@ signal home_pressed
 @export var skin := "bright"
 const HUD_IDLE := Color(.47,.59,.65,.72)
 const BUTTON_STATES := ["normal", "hover", "pressed", "disabled", "focus"]
+const MIDDLE_MIN := 380.0  ## Run's middle plate: score, chain, field and record side by side
 @onready var score_label: Label = $Stats/Score/Block/Value
 @onready var best_label: Label = $Stats/Best/Block/Value
 @onready var time_label: Label = $Stats/Time/Block/Value
@@ -70,6 +71,7 @@ func configure(id: String, android: bool) -> void:
 	if level_label:
 		$Stats/Field/Block/Caption.text = L.t("run_field_caption" if id == "bright" else "level_short",{"n":""})
 		$Stats/Field/Block/Bar.modulate.a = 0
+	if top_layout: _top_combo(true)
 
 func layout(_view: Vector2, _compact: bool) -> void:
 	pass # GameComposition fits the actual field and safe area.
@@ -132,16 +134,33 @@ func _typography(sides: bool, centered := false) -> void:
 	delta.size = Vector2(49,28)
 	time_delta.add_theme_font_size_override("font_size",12 if sides else 14)
 
-## Classic on desktop/web. Three plates as wide as the field frame: time on the left, score,
-## chain and record in the middle, the streak on the right. Two buttons stand in a row
-## outside each side plate, as tall as the plates. Returns the rect for the record
-## bar inside the middle plate.
-func layout_top(rect: Rect2) -> Rect2:
+## Classic and Bright Run on desktop/web. Three plates: time on the left, score, chain (and
+## the Run field) and record in the middle, the streak/combo on the right. Square buttons as
+## tall as the plates: outside the field frame for Classic, at the ends of the row for the
+## full-width Run field (`buttons_inside`). Returns the rect for the record bar inside the
+## middle plate.
+func layout_top(rect: Rect2, buttons_inside := false) -> Rect2:
 	_typography(false)
 	top_layout = true
+	_top_combo(true)
 	var h := rect.size.y
 	var gap := 8.0
-	var side := floorf(clampf(rect.size.x * 0.22, 160, 230))
+	var b := h
+	var left_buttons: Array[Button] = [btn_home, btn_pause]
+	var right_buttons: Array[Button] = [btn_restart, btn_settings]
+	if btn_hint: right_buttons.push_front(btn_hint)
+	var button_x := [rect.position.x - gap * 2 - b * 2, rect.end.x + gap]
+	var button_y := rect.position.y
+	if buttons_inside:
+		# On a narrow row the buttons shrink first so the middle plate keeps room for four numbers.
+		var count := left_buttons.size() + right_buttons.size()
+		var plates_min := floorf(clampf(rect.size.x * 0.2, 140, 230)) * 2 + gap * 2 + MIDDLE_MIN
+		b = floorf(clampf((rect.size.x - plates_min) / count - gap, 52, h))
+		button_y = rect.position.y + floorf((h - b) * 0.5)
+		button_x = [rect.position.x, rect.end.x - right_buttons.size() * (b + gap) + gap]
+		rect = Rect2(rect.position.x + left_buttons.size() * (b + gap), rect.position.y,
+			rect.size.x - (left_buttons.size() + right_buttons.size()) * (b + gap), h)
+	var side := floorf(clampf(rect.size.x * 0.22, 160, 230)) if not buttons_inside else floorf(clampf(rect.size.x * 0.2, 140, 230))
 	var mid := rect.size.x - side * 2 - gap * 2
 	var pad := 14.0
 	plates.visible = true
@@ -170,20 +189,24 @@ func layout_top(rect: Rect2) -> Rect2:
 	var inner := Rect2(boxes.Score.position + Vector2(pad + 4, 6), Vector2(mid - pad * 2 - 8, h - 12))
 	var bar_h := RecordBar.COMPACT_HEIGHT
 	var row_h := inner.size.y - bar_h - 4
-	var chain_w := 90.0
-	var num_w := (inner.size.x - chain_w) * 0.5
+	var middle: Array[Control] = [$Stats/Chain]
+	if level_label and mode_id == "bright":
+		middle.append($Stats/Field)
+		$Stats/Field.visible = true
+	var chain_w := 90.0 if middle.size() == 1 else 80.0
+	var num_w := (inner.size.x - chain_w * middle.size()) * 0.5
 	_place($Stats/Score, Rect2(inner.position, Vector2(num_w, row_h)))
-	_place($Stats/Chain, Rect2(inner.position + Vector2(num_w, 0), Vector2(chain_w, row_h)))
-	_place($Stats/Best, Rect2(inner.position + Vector2(num_w + chain_w, 0), Vector2(num_w, row_h)))
+	for i in middle.size():
+		_place(middle[i], Rect2(inner.position + Vector2(num_w + chain_w * i, 0), Vector2(chain_w, row_h)))
+	_place($Stats/Best, Rect2(inner.position + Vector2(inner.size.x - num_w, 0), Vector2(num_w, row_h)))
 	_top_typography()
-	# Buttons: two squares in a row on each side, as tall as the plates, spaced like the plates.
+	# Buttons: squares in a row on each side, as tall as the plates, spaced like the plates.
 	_place($Buttons, Rect2(Vector2.ZERO, size))
-	var b := h
 	var icon_pad := floorf(b * 0.16)
-	var columns := [[btn_home, btn_pause], [btn_restart, btn_settings]]
-	var xs := [rect.position.x - gap * 2 - b * 2, rect.end.x + gap]
+	var columns := [left_buttons, right_buttons]
+	var xs := button_x
 	for c in 2:
-		for i in 2:
+		for i in columns[c].size():
 			var btn: Button = columns[c][i]
 			btn.visible = true
 			btn.expand_icon = true
@@ -194,7 +217,7 @@ func layout_top(rect: Rect2) -> Rect2:
 			btn.custom_minimum_size = Vector2.ONE * b
 			btn.size = Vector2.ONE * b
 			btn.scale = Vector2.ONE
-			btn.position = Vector2(xs[c] + i * (b + gap), rect.position.y)
+			btn.position = Vector2(xs[c] + i * (b + gap), button_y)
 	return Rect2(inner.position.x, inner.end.y - bar_h, inner.size.x, bar_h)
 
 ## Width the top layout needs outside the field frame on each side (two buttons in a row).
@@ -215,9 +238,17 @@ func _top_typography() -> void:
 	$Stats/Chain/Block/Caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	$Stats/Chain/Block/Progress.alignment = BoxContainer.ALIGNMENT_CENTER
 	$Stats/Chain/Block/Space.visible = false
+	if level_label and $Stats/Field.visible:
+		$Stats/Field.top_align = true
+		$Stats/Field/Block/Bar.visible = false
+		$Stats/Field/Block/Caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		level_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		level_label.add_theme_font_size_override("font_size", 26)
 	$Stats/Combo/Streak/Panel/VBox/Bar.visible = false
+	time_delta.get_parent().position = Vector2(62, 6)
 	for slot in [$Stats/Time, $Stats/Score, $Stats/Best, $Stats/Chain, $Stats/Combo/Streak]:
 		slot.call_deferred("_fit")
+	if level_label: $Stats/Field.call_deferred("_fit")
 
 
 func _top_off() -> void:
@@ -225,14 +256,34 @@ func _top_off() -> void:
 	top_layout = false
 	plates.visible = false
 	btn_home.visible = false
-	for b in [btn_pause, btn_restart, btn_settings]:
+	for b in [btn_pause, btn_restart, btn_settings, btn_hint]:
+		if not b: continue
 		b.expand_icon = false
 		for state in BUTTON_STATES: b.remove_theme_stylebox_override(state)
+	for slot in [$Stats/Score, $Stats/Best]:
+		slot.get_node("Block/Value").remove_theme_font_size_override("font_size")
+	_top_combo(false)
 	for slot in [$Stats/Time, $Stats/Score, $Stats/Best, $Stats/Chain, $Stats/Combo/Streak]: slot.top_align = false
+	if level_label:
+		$Stats/Field.top_align = false
+		$Stats/Field/Block/Caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		level_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		level_label.remove_theme_font_size_override("font_size")
 	best_label.remove_theme_color_override("font_color")
 	$Stats/Best/Block/Caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	$Stats/Combo/Streak/Panel/VBox/Bar.visible = true
 	set_combo(0)
+
+
+## Bright Run's top row uses the plain streak plate with a ring instead of the coloured badge.
+func _top_combo(on: bool) -> void:
+	if not run_badge: return
+	var plate := on and mode_id == "bright"
+	$Stats/Combo/Streak.visible = plate or mode_id != "bright"
+	run_badge.visible = not plate and mode_id == "bright"
+	combo_box = streak if plate else run_badge.panel
+	combo_mult = $Stats/Combo/Streak/Panel/VBox/Mult if plate else run_badge.label
+	combo_bar = $Stats/Combo/Streak/Panel/VBox/Bar if plate else run_badge.bar
 
 
 func _buttons(rect: Rect2, vertical := false) -> void:
@@ -337,13 +388,13 @@ func set_buttons(playing: bool, can_restart: bool) -> void:
 
 func set_combo(streak_length: int, pulse := false) -> void:
 	var multiplier := ScoreKeeper.multiplier_for(streak_length) if streak_length >= 2 else 1
-	if mode_id == "bright":
+	if mode_id == "bright" and not top_layout:
 		run_badge.show_combo(streak_length,multiplier,pulse)
 		return
 	var tint: Color = UiKit.COMBO_COLORS[multiplier-1].lightened(.3)
 	if top_layout:
 		# The ring carries the multiplier; the plate shows the caption and the streak length.
-		combo_count.text = L.t("streak_caption")
+		combo_count.text = L.t("combo" if mode_id == "bright" else "streak_caption")
 		combo_mult.text = str(streak_length if streak_length >= 2 else 0)
 		$Plates/StreakRing.color = UiKit.COMBO_COLORS[multiplier-1]
 		$Plates/StreakRing.set_text("×%d" % multiplier, tint)
@@ -355,7 +406,7 @@ func set_combo(streak_length: int, pulse := false) -> void:
 	if pulse: pop(combo_mult)
 
 func fade_combo() -> void:
-	if mode_id == "bright": run_badge.fade_combo()
+	if mode_id == "bright" and not top_layout: run_badge.fade_combo()
 	else: set_combo(0)
 
 func reset_feedback() -> void:

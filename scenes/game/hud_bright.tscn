@@ -8,10 +8,27 @@
 [ext_resource type="Texture2D" path="res://assets/ui/icon_restart.png" id="restart"]
 [ext_resource type="Texture2D" path="res://assets/ui/icon_settings.png" id="settings"]
 [ext_resource type="Texture2D" path="res://assets/ui/icon_hint.png" id="hint"]
+[ext_resource type="Texture2D" path="res://assets/ui/icon_home.png" id="home"]
+[ext_resource type="Script" path="res://scripts/ui/hud_ring.gd" id="ring"]
 [node name="Hud" type="Control"]
 mouse_filter = 2
 script = ExtResource("hud")
 skin = "bright"
+[node name="Plates" type="Control" parent="."]
+visible = false
+mouse_filter = 2
+[node name="Time" type="Panel" parent="Plates"]
+mouse_filter = 2
+[node name="Score" type="Panel" parent="Plates"]
+mouse_filter = 2
+[node name="Streak" type="Panel" parent="Plates"]
+mouse_filter = 2
+[node name="TimeRing" type="Control" parent="Plates"]
+mouse_filter = 2
+script = ExtResource("ring")
+[node name="StreakRing" type="Control" parent="Plates"]
+mouse_filter = 2
+script = ExtResource("ring")
 [node name="Stats" type="Control" parent="."]
 mouse_filter = 2
 [node name="Time" parent="Stats" instance=ExtResource("stat")]
@@ -44,4 +61,10 @@ icon_alignment = 1
 theme_type_variation = &"IconButton"
 custom_minimum_size = Vector2(52,52)
 icon = ExtResource("settings")
+icon_alignment = 1
+[node name="Home" type="Button" parent="Buttons"]
+visible = false
+theme_type_variation = &"IconButton"
+custom_minimum_size = Vector2(52,52)
+icon = ExtResource("home")
 icon_alignment = 1

@@ -81,9 +81,11 @@ func _run() -> void:
 			var hud = scene.hud
 			var context := "%dx%d_%s_%s" % [vp.size.x,vp.size.y,str(screen[2]),mode]
 			check(hud.side_layout == (mode == "classic" and screen[2]),context+" native layout selection")
-			check(mode == "classic" or hud.run_badge.is_visible_in_tree(),context+" Run/Daily/Challenge badge present")
+			# Desktop Bright Run uses the plate with a ring (like Classic) instead of the coloured badge.
+			var badge: bool = mode != "classic" and not hud.top_layout
+			check(not badge or hud.run_badge.is_visible_in_tree(),context+" Run/Daily/Challenge badge present")
 			check(mode != "classic" or hud.run_badge == null,context+" Classic has no coloured badge instance")
-			if mode != "classic":
+			if badge:
 				check(not hud.get_node("Stats/Combo/Streak").is_visible_in_tree(),context+" no duplicate ordinary series")
 			if mode == "classic" and screen[2]:
 				var expected_cell := maxf(8,floorf(minf((vp.size.x-maxf(screen[3].position.x,screen[3].size.x)*4-140-16-6)/BoardLogic.LONG,(vp.size.y-maxf(screen[3].position.y,screen[3].size.y)*2-8-6)/BoardLogic.SHORT)))
@@ -99,7 +101,7 @@ func _run() -> void:
 					scene.keeper.color_streak_hits = 4
 					scene._update_hud()
 					hud.set_combo(length,true)
-					if mode != "classic" and length >= 2:
+					if badge and length >= 2:
 						check(hud.combo_box.scale.is_equal_approx(Vector2.ONE*1.35),context+" exact initial upstream pulse scale")
 					hud.set_number(hud.score_label,9223372036854775807)
 					hud.set_number(hud.best_label,9223372036854775807)
@@ -108,7 +110,7 @@ func _run() -> void:
 					check(geometry(scene) == base,context+language+" invariant slots with long values/activation")
 					check(hud.score_label.text.replace("\u2009","").replace("\n","") == "9223372036854775807",context+" all digits")
 					check(hud.chain_count.text == "4" and hud.chain_gem.texture == scene.board._tex(1),context+" independent Color Chain")
-					if mode != "classic":
+					if badge:
 						var m := ScoreKeeper.multiplier_for(length)
 						if length >= 2:
 							check(hud.combo_mult.text == "%s ×%d · %d" % [locale.t("combo").to_upper(),m,length],context+" upstream label")
@@ -130,12 +132,12 @@ func _run() -> void:
 				var clock: float = scene.play_time
 				hud.update_progress(scene.keeper,clock+1.75,true,scene.board,scene.wave)
 				check(is_equal_approx(hud.combo_bar.value,50),context+" half of ordinary 3.5s")
-				var tw: Tween = hud.run_badge._pulse if mode != "classic" else null
+				var tw: Tween = hud.run_badge._pulse if badge else null
 				if tw and tw.is_valid(): tw.pause(); tw.custom_step(.4)
-				check(mode == "classic" or hud.combo_box.scale.is_equal_approx(Vector2.ONE),context+" pulse settles")
+				check(not badge or hud.combo_box.scale.is_equal_approx(Vector2.ONE),context+" pulse settles")
 				hud.fade_combo()
 				await create_timer(.4).timeout
-				check(mode == "classic" or hud.combo_box.modulate.a == 0,context+" fade .35s")
+				check(not badge or hud.combo_box.modulate.a == 0,context+" fade .35s")
 			check(shape == [scene.logic.cols,scene.logic.rows],context+" HUD never changes logical shape")
 			observations.append({"mode":context,"cell":scene.board.cell,"header":hud.get_node("Stats").size})
 			scene.go_menu()
