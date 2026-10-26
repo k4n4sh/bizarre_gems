@@ -86,7 +86,7 @@ func _run() -> void:
 			if mode != "classic":
 				check(not hud.get_node("Stats/Combo/Streak").is_visible_in_tree(),context+" no duplicate ordinary series")
 			if mode == "classic" and screen[2]:
-				var expected_cell := maxf(8,floorf(minf((vp.size.x-maxf(screen[3].position.x,screen[3].size.x)*4-140-16-6)/23,(vp.size.y-maxf(screen[3].position.y,screen[3].size.y)*2-8-6)/15)))
+				var expected_cell := maxf(8,floorf(minf((vp.size.x-maxf(screen[3].position.x,screen[3].size.x)*4-140-16-6)/BoardLogic.LONG,(vp.size.y-maxf(screen[3].position.y,screen[3].size.y)*2-8-6)/BoardLogic.SHORT)))
 				check(scene.board.cell == expected_cell,context+" pinned side cell geometry")
 				check(absf(hud.best_label.get_parent().get_global_rect().get_center().y-hud.btn_restart.get_global_rect().get_center().y) <= 1.1,context+" whole record block centred on restart")
 			for language in ["ru","en","tr"]:
@@ -116,7 +116,10 @@ func _run() -> void:
 							check(hud.combo_box.scale.x >= .96 and hud.combo_box.scale.x <= 1.36,context+" original Back pulse stays bounded")
 						else: check(hud.combo_box.modulate.a == 0,context+" hidden below 2")
 					else:
-						check(hud.combo_mult.text == "×%d" % (ScoreKeeper.multiplier_for(length) if length >= 2 else 1),context+" reference multiplier")
+						var multiplier_text := "×%d" % (ScoreKeeper.multiplier_for(length) if length >= 2 else 1)
+						# Desktop Classic shows the multiplier inside the streak ring.
+						var shown: String = hud.get_node("Plates/StreakRing").text if hud.top_layout else hud.combo_mult.text
+						check(shown == multiplier_text,context+" reference multiplier")
 					bounds(scene,context+language)
 					if length == 9 and language == "ru":
 						await capture(vp,context+"_active")

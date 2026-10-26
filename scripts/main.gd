@@ -139,6 +139,7 @@ var _hud_safe_poll := 0.0
 var best_start := 0        ## the record when this game started: the race the record bar shows
 var record_beaten := false
 var record_bar: RecordBar
+var _leave_from_hud := false  ## the leave dialog came from the HUD home button: "stay" resumes the game
 var fly: FlyLayer
 
 # ---- nodes of scenes/main.tscn ----
@@ -262,6 +263,7 @@ func _connect_screens() -> void:
 		h.restart_pressed.connect(func(): start_game(mode.id, daily, challenge))
 		h.settings_pressed.connect(_open_settings_from_hud)
 		h.hint_pressed.connect(_use_hint)
+		h.home_pressed.connect(_ask_leave_from_hud)
 
 	home.play_pressed.connect(func():
 		if not Progress.needs_tutorial():
@@ -307,6 +309,10 @@ func _connect_screens() -> void:
 func _navigate(to: StringName) -> void:
 	if to in [&"map", &"puzzle_map", &"levels", &"zen", &"puzzle"]: return
 	if to == &"collection" and not Progress.COSMETICS_ENABLED:
+		return
+	if to == &"pause" and _leave_from_hud and confirm.visible:
+		_leave_from_hud = false
+		_resume_play()
 		return
 	match to:
 		&"back":
@@ -692,7 +698,7 @@ static func parse_challenge(p: String) -> Dictionary:
 			return {}
 	var cols := int(a[3])
 	var rows := int(a[4])
-	var gems := 270 if a[1] == "classic" else 168
+	var gems := BoardLogic.CLASSIC.kinds * BoardLogic.CLASSIC.per_kind if a[1] == "classic" else 168
 	if cols < 3 or rows < 3 or cols > 1000 or rows > 1000 \
 			or cols * rows <= gems or cols * rows > 1000 \
 			or int(a[2]) < 0 or int(a[2]) > 4294967295 or int(a[5]) < 0:
@@ -1012,7 +1018,17 @@ func pause_game() -> void:
 	show_screen(pause)
 
 
+## HUD home button: one question, straight from the game (no stop at the pause screen).
+func _ask_leave_from_hud() -> void:
+	if state != State.PLAYING:
+		return
+	pause_game()
+	_leave_from_hud = true
+	show_screen(confirm)
+
+
 func go_menu() -> void:
+	_leave_from_hud = false
 	_report_combo_ab("abandoned")
 	_ab_active = false
 	_cancel_ad()
@@ -1676,6 +1692,7 @@ func _on_back() -> void:
 	if settings.visible:
 		_close_settings()
 	elif confirm.visible:
+		_leave_from_hud = false
 		show_screen(pause)
 	elif map.visible:
 		show_screen(modes)

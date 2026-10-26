@@ -68,7 +68,7 @@ func _run() -> void:
 		for timed in [false,true]:
 			for id in ["classic","bright"]:
 				var row: Dictionary = simulation.replay(trace.hits,gap,timed,id)
-				check(row.score >= 0 and row.destroyed <= 270 and row.time_left >= 0,"actual keeper simulation "+str([gap,timed,id]))
+				check(row.score >= 0 and row.destroyed <= 240 and row.time_left >= 0,"actual keeper simulation "+str([gap,timed,id]))
 				if id == "bright": check(row.total_bonus_seconds == 0,"Run simulation has no hit seconds")
 	var progress = root.get_node("Progress")
 	progress.report("gems",999)

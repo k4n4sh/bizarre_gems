@@ -3,6 +3,8 @@ extends Control
 ## Preserve refinement's board sizing reservations even when the visible Run header is compact.
 
 const STRIP_GAP := 6.0
+const TOP_HEIGHT := 96.0  ## Classic top plates (desktop/web)
+const TOP_GAP := 12.0
 
 func arrange_practice(board: BoardView, hud: Hud, card: PanelContainer) -> void:
 	if size.x < 1 or size.y < 1: return
@@ -40,8 +42,8 @@ func arrange(board: BoardView, hud: Hud, mode_id: String, android: bool,
 		var side_inset := maxf(ceilf(insets.position.x), ceilf(insets.size.x))
 		var vertical_inset := maxf(ceilf(insets.position.y), ceilf(insets.size.y))
 		var safe_height := view.y - vertical_inset * 2 - 8
-		var fit_cell := maxf(8, floorf(minf((view.x-side_inset*4-140-16-6)/23, (safe_height-6)/15)))
-		var board_width := fit_cell * 23 + 6
+		var fit_cell := maxf(8, floorf(minf((view.x-side_inset*4-140-16-6)/BoardLogic.LONG, (safe_height-6)/BoardLogic.SHORT)))
+		var board_width := fit_cell * BoardLogic.LONG + 6
 		board.position = Vector2(floorf((size.x-board_width)/2), 0)
 		board.size = Vector2(board_width, size.y)
 		board.refresh()
@@ -49,6 +51,9 @@ func arrange(board: BoardView, hud: Hud, mode_id: String, android: bool,
 		hud.size = size
 		hud.layout_sides(board.get_rect(), view, insets)
 		_place_strip(strip, board)
+		return
+	if mode_id == "classic" and hud.plates:
+		_arrange_top(board, hud, strip)
 		return
 	var run := mode_id == "bright"
 	var reservation := (148.0 if hud.skin == "bright" else 74.0) + strip_room
@@ -77,6 +82,7 @@ func arrange(board: BoardView, hud: Hud, mode_id: String, android: bool,
 func _place_strip(strip: Control, board: BoardView) -> void:
 	if not strip or not strip.visible:
 		return
+	if strip is RecordBar: strip.compact = false
 	var h := strip.custom_minimum_size.y
 	var frame_top := board.position.y+board.origin.y-board.frame_pad
 	var left := board.position.x+maxf(0, board.origin.x-board.frame_pad)
@@ -84,3 +90,25 @@ func _place_strip(strip: Control, board: BoardView) -> void:
 	strip.position = Vector2(left, frame_top-STRIP_GAP-h)
 	strip.size = Vector2(maxf(1, width), h)
 	strip.modulate.a = 1.0 if strip.position.y >= 0 else 0.0
+
+
+## Classic on desktop/web: plates right above the field frame, the record bar inside the
+## middle plate, and room on both sides for the button columns.
+func _arrange_top(board: BoardView, hud: Hud, strip: Control) -> void:
+	var plate_h := TOP_HEIGHT
+	var room := hud.top_side_room(plate_h)
+	board.position = Vector2(room, plate_h + TOP_GAP)
+	board.size = Vector2(maxf(1, size.x - room * 2), maxf(1, size.y - plate_h - TOP_GAP))
+	board.refresh()
+	var frame := Vector2(board.logic.cols, board.logic.rows) * board.cell + Vector2.ONE * board.frame_pad * 2
+	var top := maxf(0, floorf((size.y - plate_h - TOP_GAP - frame.y) / 2))
+	board.position.y = top + plate_h + TOP_GAP - board.origin.y + board.frame_pad
+	var left := board.position.x + board.origin.x - board.frame_pad
+	hud.position = Vector2.ZERO
+	hud.size = size
+	var bar := hud.layout_top(Rect2(left, top, frame.x, plate_h))
+	if strip and strip.visible:
+		if strip is RecordBar: strip.compact = true
+		strip.position = bar.position
+		strip.size = bar.size
+		strip.modulate.a = 1.0

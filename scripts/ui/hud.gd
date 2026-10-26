@@ -5,6 +5,7 @@ signal pause_pressed
 signal restart_pressed
 signal settings_pressed
 signal hint_pressed
+signal home_pressed
 @export var skin := "bright"
 const HUD_IDLE := Color(.47,.59,.65,.72)
 @onready var score_label: Label = $Stats/Score/Block/Value
@@ -16,6 +17,8 @@ const HUD_IDLE := Color(.47,.59,.65,.72)
 @onready var btn_restart: Button = $Buttons/Restart
 @onready var btn_settings: Button = $Buttons/Settings
 @onready var btn_hint: Button = get_node_or_null("Buttons/Hint")
+@onready var btn_home: Button = get_node_or_null("Buttons/Home")
+@onready var plates: Control = get_node_or_null("Plates")
 @onready var level_label: Label = get_node_or_null("Stats/Field/Block/Value")
 @onready var chain_slot: Control = $Stats/Chain
 @onready var chain_gem: TextureRect = $Stats/Chain/Block/Progress/Gem
@@ -30,6 +33,7 @@ var title_label: Label
 var mode_id := ""
 var side_layout := false
 var stat_slots: Array[Control] = []
+var top_layout := false  ## Classic on desktop/web: three plates in a row, buttons outside them
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -39,6 +43,10 @@ func _ready() -> void:
 	btn_restart.pressed.connect(func(): Sfx.play("click"); restart_pressed.emit())
 	btn_settings.pressed.connect(func(): settings_pressed.emit())
 	if btn_hint: btn_hint.pressed.connect(func(): hint_pressed.emit())
+	if btn_home: btn_home.pressed.connect(func(): Sfx.play("click"); home_pressed.emit())
+	if plates:
+		$Plates/TimeRing.source = time_bar
+		$Plates/StreakRing.source = $Stats/Combo/Streak/Panel/VBox/Bar
 	configure("bright" if skin == "bright" else "classic",false)
 
 func configure(id: String, android: bool) -> void:
@@ -89,6 +97,7 @@ func _place(node: Control, rect: Rect2) -> void:
 	if node.has_method("_fit"): node.call("_fit")
 
 func _typography(sides: bool, centered := false) -> void:
+	_top_off()
 	for slot in [$Stats/Time,$Stats/Score,$Stats/Best]:
 		var caption: Label = slot.get_node("Block/Caption")
 		var value: Label = slot.get_node("Block/Value")
@@ -120,6 +129,102 @@ func _typography(sides: bool, centered := false) -> void:
 	delta.position = Vector2(0,7) if sides else (Vector2(0,38) if mode_id == "bright" else Vector2(55,6))
 	delta.size = Vector2(49,28)
 	time_delta.add_theme_font_size_override("font_size",12 if sides else 14)
+
+## Classic on desktop/web. Three plates as wide as the field frame: time on the left, score,
+## chain and record in the middle, the streak on the right. Two buttons stand in a row
+## outside each side plate, as tall as the plates. Returns the rect for the record
+## bar inside the middle plate.
+func layout_top(rect: Rect2) -> Rect2:
+	_typography(false)
+	top_layout = true
+	var h := rect.size.y
+	var gap := 8.0
+	var side := floorf(clampf(rect.size.x * 0.22, 160, 230))
+	var mid := rect.size.x - side * 2 - gap * 2
+	var pad := 14.0
+	plates.visible = true
+	var plate_style := UiKit.box(Color(0.03, 0.05, 0.16, 0.55), Color(1, 1, 1, 0.12), 1, 16, Vector4.ZERO)
+	var boxes := {"Time": Rect2(rect.position.x, rect.position.y, side, h),
+		"Score": Rect2(rect.position.x + side + gap, rect.position.y, mid, h),
+		"Streak": Rect2(rect.end.x - side, rect.position.y, side, h)}
+	for k in boxes:
+		var p: Panel = plates.get_node(k)
+		p.add_theme_stylebox_override("panel", plate_style)
+		_place(p, boxes[k])
+	_place($Stats, Rect2(Vector2.ZERO, size))
+	var ring := floorf(minf(56, h - 24))
+	var ring_y := rect.position.y + floorf((h - ring) * 0.5)
+	var time_ring: HudRing = $Plates/TimeRing
+	var streak_ring: HudRing = $Plates/StreakRing
+	_place(time_ring, Rect2(boxes.Time.position.x + pad, ring_y, ring, ring))
+	_place(streak_ring, Rect2(boxes.Streak.position.x + pad, ring_y, ring, ring))
+	var text_x := pad + ring + 12
+	var text_h := 64.0
+	var text_y := rect.position.y + floorf((h - text_h) * 0.5)
+	_place($Stats/Time, Rect2(boxes.Time.position.x + text_x, text_y, side - text_x - pad, text_h))
+	_place($Stats/Combo, Rect2(boxes.Streak.position.x + text_x, text_y, side - text_x - pad, text_h))
+	_fit_combo()
+	# Middle plate: one caption row for score, chain and record, the bar under the numbers.
+	var inner := Rect2(boxes.Score.position + Vector2(pad + 4, 10), Vector2(mid - pad * 2 - 8, h - 20))
+	var bar_h := RecordBar.COMPACT_HEIGHT
+	var row_h := inner.size.y - bar_h - 6
+	var chain_w := 90.0
+	var num_w := (inner.size.x - chain_w) * 0.5
+	_place($Stats/Score, Rect2(inner.position, Vector2(num_w, row_h)))
+	_place($Stats/Chain, Rect2(inner.position + Vector2(num_w, 0), Vector2(chain_w, row_h)))
+	_place($Stats/Best, Rect2(inner.position + Vector2(num_w + chain_w, 0), Vector2(num_w, row_h)))
+	_top_typography()
+	# Buttons: two squares in a row on each side, as tall as the plates.
+	_place($Buttons, Rect2(Vector2.ZERO, size))
+	var b := h
+	var columns := [[btn_home, btn_pause], [btn_restart, btn_settings]]
+	var xs := [rect.position.x - gap - b * 2 - 4, rect.end.x + gap]
+	for c in 2:
+		for i in 2:
+			var btn: Button = columns[c][i]
+			btn.visible = true
+			btn.expand_icon = true
+			btn.custom_minimum_size = Vector2.ONE * b
+			btn.size = Vector2.ONE * b
+			btn.scale = Vector2.ONE
+			btn.position = Vector2(xs[c] + i * (b + 4), rect.position.y)
+	return Rect2(inner.position.x, inner.end.y - bar_h, inner.size.x, bar_h)
+
+## Width the top layout needs outside the field frame on each side (two buttons in a row).
+func top_side_room(height: float) -> float:
+	return height * 2 + 4 + 8
+
+
+func _top_typography() -> void:
+	for slot in [$Stats/Time, $Stats/Score, $Stats/Best, $Stats/Chain, $Stats/Combo/Streak]:
+		slot.top_align = slot != $Stats/Time and slot != $Stats/Combo/Streak
+	for slot in [$Stats/Score, $Stats/Best]:
+		slot.get_node("Block/Bar").visible = false
+		slot.get_node("Block/Value").add_theme_font_size_override("font_size", 30)
+	$Stats/Time/Block/Bar.visible = false
+	$Stats/Best/Block/Caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	best_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	best_label.add_theme_color_override("font_color", UiKit.MUTED)
+	$Stats/Chain/Block/Caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	$Stats/Chain/Block/Progress.alignment = BoxContainer.ALIGNMENT_CENTER
+	$Stats/Chain/Block/Space.visible = false
+	$Stats/Combo/Streak/Panel/VBox/Bar.visible = false
+	for slot in [$Stats/Time, $Stats/Score, $Stats/Best, $Stats/Chain, $Stats/Combo/Streak]:
+		slot.call_deferred("_fit")
+
+
+func _top_off() -> void:
+	if not top_layout: return
+	top_layout = false
+	plates.visible = false
+	btn_home.visible = false
+	for b in [btn_pause, btn_restart, btn_settings]: b.expand_icon = false
+	for slot in [$Stats/Time, $Stats/Score, $Stats/Best, $Stats/Chain, $Stats/Combo/Streak]: slot.top_align = false
+	best_label.remove_theme_color_override("font_color")
+	$Stats/Best/Block/Caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	$Stats/Combo/Streak/Panel/VBox/Bar.visible = true
+	set_combo(0)
+
 
 func _buttons(rect: Rect2, vertical := false) -> void:
 	_place($Buttons,rect)
@@ -215,6 +320,7 @@ func set_time(text: String, fraction: float, low: bool) -> void:
 	time_label.add_theme_color_override("font_color",UiKit.DANGER if low else UiKit.CREAM)
 	time_bar.theme_type_variation = &"ProgressBarLow" if low else &""
 	time_bar.value = clampf(fraction,0,1)*100
+	if plates: $Plates/TimeRing.color = UiKit.DANGER if low else UiKit.COMBO_COLORS[1]
 
 func set_buttons(playing: bool, can_restart: bool) -> void:
 	btn_pause.disabled = not playing
@@ -225,9 +331,17 @@ func set_combo(streak_length: int, pulse := false) -> void:
 	if mode_id == "bright":
 		run_badge.show_combo(streak_length,multiplier,pulse)
 		return
-	combo_count.text = L.t("streak_caption")+(" %d" % streak_length if streak_length >= 2 else "")
-	combo_mult.text = "×%d" % multiplier
-	combo_mult.add_theme_color_override("font_color",UiKit.COMBO_COLORS[multiplier-1].lightened(.3))
+	var tint: Color = UiKit.COMBO_COLORS[multiplier-1].lightened(.3)
+	if top_layout:
+		# The ring carries the multiplier; the plate shows the caption and the streak length.
+		combo_count.text = L.t("streak_caption")
+		combo_mult.text = str(streak_length if streak_length >= 2 else 0)
+		$Plates/StreakRing.color = UiKit.COMBO_COLORS[multiplier-1]
+		$Plates/StreakRing.set_text("×%d" % multiplier, tint)
+	else:
+		combo_count.text = L.t("streak_caption")+(" %d" % streak_length if streak_length >= 2 else "")
+		combo_mult.text = "×%d" % multiplier
+	combo_mult.add_theme_color_override("font_color",tint)
 	_activity(streak,streak_length >= 2)
 	if pulse: pop(combo_mult)
 

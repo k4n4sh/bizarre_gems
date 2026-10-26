@@ -34,7 +34,7 @@ func make_trace(seed_value: int, policy: String) -> Dictionary:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
 	var board := BoardLogic.new()
-	board.setup(23, 15, rng, BoardLogic.CLASSIC.shining, 10, 27)
+	board.setup(22, 14, rng, BoardLogic.CLASSIC.shining, 10, 24)
 	var layout := (str(board.cells) + str(board.shine)).sha256_text()
 	var chooser := RandomNumberGenerator.new()
 	chooser.seed = seed_value + 100000

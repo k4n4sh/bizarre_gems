@@ -33,12 +33,12 @@ func _init() -> void:
 	var counts := {}
 	for k in b.cells:
 		counts[k] = counts.get(k, 0) + 1
-	check(b.cells.size() == 345, "board has 23x15 slots")
-	check(counts.get(-1, 0) == 75, "75 empty slots")
+	check(b.cells.size() == 308, "board has 22x14 slots")
+	check(counts.get(-1, 0) == 68, "68 empty slots")
 	var all27 := true
 	for k in BoardLogic.KINDS:
-		all27 = all27 and counts.get(k, 0) == 27
-	check(all27, "each of 10 kinds appears 27 times")
+		all27 = all27 and counts.get(k, 0) == 24
+	check(all27, "each of 10 kinds appears 24 times")
 
 	# pair on a row, gap skipping
 	var t := board_from(["1..1", "....", "2..3"])
@@ -74,7 +74,7 @@ func _init() -> void:
 		for xx in b.cols:
 			if b.is_empty(Vector2i(xx, yy)):
 				after += b.matches_from(Vector2i(xx, yy)).size()
-	check(b.cols == 15 and b.rows == 23 and before == after, "transpose keeps every move")
+	check(b.cols == 14 and b.rows == 22 and before == after, "transpose keeps every move")
 
 	# shuffle keeps gem counts and finds a move
 	var s := board_from(["1.2", "...", "3.1"])
@@ -98,14 +98,14 @@ func _init() -> void:
 	var ok_sizes := true
 	for a in [Vector2(540, 1150), Vector2(1250, 620), Vector2(700, 700), Vector2(380, 1400), Vector2(2000, 500)]:
 		var d := BoardLogic.best_dims(a)
-		ok_sizes = ok_sizes and d.x * d.y >= 317 and d.x * d.y <= 372
-	check(ok_sizes, "every shape has 345 slots ±8% for the 270 gems")
+		ok_sizes = ok_sizes and d.x * d.y >= 283 and d.x * d.y <= 332
+	check(ok_sizes, "every shape has 308 slots ±8% for the 240 gems")
 	var sq := BoardLogic.new()
 	sq.setup(tall.x, tall.y, rng)
 	var gems := 0
 	for kk in sq.cells:
 		if kk >= 0: gems += 1
-	check(gems == 270, "270 gems on a %dx%d board" % [tall.x, tall.y])
+	check(gems == 240, "240 gems on a %dx%d board" % [tall.x, tall.y])
 	var cm := BoardLogic.BRIGHT
 	var phone := BoardLogic.best_dims(Vector2(540, 1150), cm.slots)
 	var small := BoardLogic.new()

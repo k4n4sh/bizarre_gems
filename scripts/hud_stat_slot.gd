@@ -5,6 +5,7 @@ extends Control
 
 var content: Control
 var vertical_padding := 0.0
+var top_align := false  ## pin the block to the top so captions of neighbouring slots line up
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -22,3 +23,5 @@ func _fit() -> void:
 	content.size = extent
 	content.scale = Vector2.ONE * fit
 	content.position = (size - extent * fit) * 0.5
+	if top_align:
+		content.position.y = 0.0

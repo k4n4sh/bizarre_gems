@@ -6,17 +6,17 @@ extends RefCounted
 ## directions is taken; every kind that appears at least twice among them is knocked out.
 
 const KINDS := 10
-const PER_KIND := 27
-const LONG := 23
-const SHORT := 15
+const PER_KIND := 24
+const LONG := 22
+const SHORT := 14
 const EMPTY := -1
 const JOKER := 99  ## wild gem: joins whichever kind is most common among a strike's hits
 const SHINING := 8  ## gems with a bonus on them at the start of a game
-## Game modes. Classic is the original game: 270 gems, a wide 23x15 board on desktops (tall
+## Game modes. Classic is the original game: 240 gems, a wide 22x14 board on desktops (tall
 ## on phones), and the round ends when no moves are left. Bright is the toy-style mode: fewer,
 ## bigger tiles, a fresh board whenever moves run out. Each has its own leaderboard.
-const CLASSIC := {"id": "classic", "skin": "classic", "kind": "classic", "kinds": 10, "per_kind": 27, "cols": 23,
-	"rows": 15, "slots": 345, "shining": 8, "board": "score", "waves": false}
+const CLASSIC := {"id": "classic", "skin": "classic", "kind": "classic", "kinds": 10, "per_kind": 24, "cols": 22,
+	"rows": 14, "slots": 308, "shining": 8, "board": "score", "waves": false}
 const BRIGHT := {"id": "bright", "skin": "bright", "kind": "run", "kinds": 6, "per_kind": 28, "cols": 10, "rows": 20,
 	"slots": 200, "shining": 6, "board": "score_bright", "waves": true}
 ## Level map: each level is one fixed, fully solvable board scored with 1-3 stars.
@@ -845,8 +845,8 @@ func shuffle_remaining(rng: RandomNumberGenerator) -> void:
 
 ## Grid shape that gives the biggest cells in the given area for about `slots` slots
 ## (within -8%..+8%). The gem count is fixed by the mode; only the shape changes.
-static func best_dims(area: Vector2, slots := 345) -> Vector2i:
-	var fallback := Vector2i(LONG, SHORT) if slots >= 300 else Vector2i(7, 15)
+static func best_dims(area: Vector2, slots := 308) -> Vector2i:
+	var fallback := Vector2i(LONG, SHORT) if slots >= 280 else Vector2i(7, 15)
 	if area.x <= 0.0 or area.y <= 0.0:
 		return fallback
 	var lo := int(slots * 0.92)

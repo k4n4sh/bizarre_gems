@@ -10,6 +10,8 @@ var race := true     ## false: only the flame (level and puzzle modes have no re
 var score := 0
 var beaten := false
 var hot := 0
+var compact := false  ## Classic top plate: a plain thick bar; score and record are shown next to it
+const COMPACT_HEIGHT := 14.0
 var _fill := 0.0     ## shown fill of the bar, eased towards the score
 var _pulse := 0.0    ## glow after the record falls
 var _pop := 0.0      ## bump of the flame when the streak grows
@@ -61,12 +63,35 @@ func _draw() -> void:
 	var h := size.y
 	if h < 8.0 or size.x < 40.0:
 		return  # not laid out yet
+	if compact:
+		_draw_compact()
+		return
 	var chip := h * 2.4 if hot >= FLAME_FROM else 0.0
 	if race:
 		var pill := Rect2(0, h * 0.06, size.x - chip - (h * 0.25 if chip > 0.0 else 0.0), h * 0.88)
 		_draw_race(pill)
 	if chip > 0.0:
 		_draw_flame_chip(Rect2(size.x - chip, 0, chip, h))
+
+
+## The bar alone, with the hot-streak flame riding on the end of the fill.
+func _draw_compact() -> void:
+	var pill := Rect2(0, 0, size.x, COMPACT_HEIGHT)
+	if race:
+		if _pulse > 0.0:
+			draw_style_box(UiKit.box(Color(0, 0, 0, 0), Color(UiKit.BRASS_LIGHT, _pulse), int(2 + _pulse * 3), 99, Vector4.ZERO),
+				pill.grow(2.0 + _pulse * 4.0))
+		draw_style_box(_bg, pill)
+		var fw := pill.size.x * _fill
+		if fw >= pill.size.y:
+			_bar.bg_color = UiKit.BRASS.lerp(Color("#ff9a2e"), 0.25 + 0.25 * sin(_t * 6.0)) if beaten else Color(UiKit.BRASS, 0.85)
+			if hot >= ScoreKeeper.HOT_AT and not beaten:
+				_bar.bg_color = Color("#ff7a2e")
+			draw_style_box(_bar, Rect2(pill.position, Vector2(fw, pill.size.y)))
+	if hot >= FLAME_FROM:
+		var end := clampf(pill.size.x * (_fill if race else 1.0), pill.size.y * 1.4, pill.size.x - pill.size.y * 2.6)
+		var chip := pill.size.y * 2.2
+		_draw_flame_chip(Rect2(end - chip * 0.5, -chip * 0.35, chip, chip))
 
 
 func _draw_race(pill: Rect2) -> void:

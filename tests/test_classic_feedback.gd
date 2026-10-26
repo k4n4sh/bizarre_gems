@@ -97,9 +97,9 @@ func run_suite(main) -> Dictionary:
 		# Shape/size/zoom/transpose all resolve logical anchors, not stored pixels.
 		main._reset_visual_feedback()
 		var blank := PackedInt32Array()
-		blank.resize(23 * 15)
+		blank.resize(22 * 14)
 		blank.fill(BoardLogic.EMPTY)
-		main.logic.load_cells(23,15,blank)
+		main.logic.load_cells(22,14,blank)
 		main.board.refresh()
 		var original_size: Vector2 = main.board.size
 		var empty_slots: Array[Vector2i] = []

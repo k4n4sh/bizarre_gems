@@ -135,7 +135,7 @@ func daily_rollover(main) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash("bizarre-gems-2026-10-16-classic-1")
 	var b := BoardLogic.new()
-	b.setup(23, 15, rng, 8, 10, 27)
+	b.setup(22, 14, rng, 8, 10, 24)
 	check(digest(main.logic) == digest(b), "Classic Daily canonical seeded generation retained")
 	main.test_day = "2026-10-17"
 	main._deal_board()
